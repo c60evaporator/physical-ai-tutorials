@@ -1,0 +1,81 @@
+services:
+  bench2drive-dev:
+    image: "${IMAGE_NAME:-bench2drive-dev}:${IMAGE_TAG:-1.0}"
+    # docker build options
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      # --build-arg option
+      args:
+        # CUDA and Ubuntu Versions
+        CUDA_VERSION: "${CUDA_VERSION:-11.8.0}"
+        UBUNTU_VERSION: "${UBUNTU_VERSION:-22.04}"
+        # Python version
+        PYTHON_VERSION: "${PYTHON_VERSION:-3.9}"
+        # PyTorch versions
+        TORCH_CUDA: "${TORCH_CUDA:-cu118}"
+        # Conda settings
+        MINIFORGE_VERSION: "${MINIFORGE_VERSION:-24.11.0-1}"
+        CONDA_DIR: "${CONDA_DIR:-/opt/conda}"
+        # GPU architecture (https://en.wikipedia.org/wiki/CUDA#GPUs_supported)
+        TORCH_CUDA_ARCH_LIST: "${TORCH_CUDA_ARCH_LIST:-8.9}"
+        # CARLA_ROOT
+        CARLA_ROOT: "${CARLA_ROOT:-/workspace/carla}"
+        # Match host UID/GID to avoid permission issues on bind mounts
+        USERNAME: "${USERNAME:-developer}"
+        UID: "${HOST_UID:-1000}"
+        GID: "${HOST_GID:-1000}"
+
+    # Container name (--name option)
+    container_name: bench2drive_dev
+    # Set resource sharing to host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]  # --gpus
+    ipc: host  # --ipc
+    network_mode: host  # Use host network to connect to CARLA on host
+    shm_size: "${SHM_SIZE:-16g}"  # --shm-size
+    # Stable operation for development
+    init: true  # --init option
+    stdin_open: true  # -i option
+    tty: true  # -t option
+    # Set startup directory
+    working_dir: /workspace
+
+    # Environment variables (-e option)
+    environment:
+      # Base path for datasets inside the container
+      DATASET_ROOT: "/workspace/Bench2DriveZoo/data"
+      # Set to "True" to use an externally launched CARLA server (e.g. on host)
+      EXTERNAL_CARLA: "${EXTERNAL_CARLA:-True}"
+      # GPU list and port settings for multi-GPU evaluation
+      EVAL_GPUS: "${EVAL_GPUS:-0}"
+      CARLA_BASE_PORT: "${CARLA_BASE_PORT:-30000}"
+      CARLA_BASE_TM_PORT: "${CARLA_BASE_TM_PORT:-50000}"
+      CARLA_PORT_STEP: "${CARLA_PORT_STEP:-150}"
+    
+    # Volume mounts
+    volumes:
+      # Bench2DriveZoo folders included in .dockerignore
+      - ./Bench2DriveZoo/ckpts:/workspace/Bench2DriveZoo/ckpts
+      - ./Bench2DriveZoo/data:/workspace/Bench2DriveZoo/data
+      - ./Bench2DriveZoo/adzoo:/workspace/Bench2DriveZoo/adzoo
+      - ./Bench2DriveZoo/team_code:/workspace/Bench2DriveZoo/team_code
+      # work_dirs and test folders
+      - ./Bench2DriveZoo/work_dirs:/workspace/Bench2DriveZoo/work_dirs
+      - ./Bench2DriveZoo/test:/workspace/Bench2DriveZoo/test
+      # CARLA
+      - "${CARLA_HOST_PATH:-./carla}:/workspace/carla"
+      # Mount datasets as read-only (Base dataset and Maps)
+      - type: bind
+        source: "${DATASET_HOST:-./data/Bench2Drive-Base}"
+        target: "${DATASET_CONT:-/workspace/Bench2DriveZoo/data/bench2drive/v1}"
+        read_only: true
+      - type: bind
+        source: "${DATASET_HOST:-./data/Bench2Drive-Map}"
+        target: "${DATASET_CONT:-/workspace/Bench2DriveZoo/data/bench2drive/maps}"
+        read_only: true

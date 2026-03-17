@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+# Python cache and artifacts
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.ipynb_checkpoints/
+
+# Datasets
+data/
+datasets/
+# Model outputs
+outputs/
+# MLflow and WandB
+runs/
+mlruns/
+wandb/
+# Model files
+*.pt
+*.pth
+*.onnx
+*.engine
+# Sensitive files
+.env
+*.pem
+*.key
+
+# Bench2Drive folders
+carla/
+Bench2DriveZoo/ckpts/
+Bench2DriveZoo/data/
+Bench2DriveZoo/adzoo/
+Bench2DriveZoo/team_code/
+Bench2DriveZoo/work_dirs/

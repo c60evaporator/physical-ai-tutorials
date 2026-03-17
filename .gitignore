@@ -1,0 +1,8 @@
+ch8_simulation/Bench2Drive/carla
+ch8_simulation/Bench2Drive/carla_launch/.carla_pids
+ch8_simulation/Bench2Drive/carla_launch/*.log
+ch8_simulation/Bench2Drive/Bench2Drive
+ch8_simulation/Bench2Drive/Bench2DriveZoo
+ch8_simulation/Bench2Drive/data
+
+.env

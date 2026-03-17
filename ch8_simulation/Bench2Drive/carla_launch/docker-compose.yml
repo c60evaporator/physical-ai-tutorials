@@ -1,0 +1,36 @@
+services:
+  carla_sim:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # --build-arg option
+      args:
+        # Proxy settings (if needed)
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+    image: "carla-runtime:latest"
+    container_name: carla_sim
+    # Set resource sharing to host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host
+    network_mode: host
+    shm_size: "${CARLA_SHM_SIZE:-8g}"
+    stdin_open: true
+    tty: true
+    working_dir: /home/carla
+    volumes:
+      # Mount the host CARLA installation (read-only)
+      - "${CARLA_HOST_PATH:-../carla}:/home/carla/carla:ro"
+    command:
+      - bash
+      - carla/CarlaUE4.sh
+      - -RenderOffScreen
+      - -nosound
+      - -carla-rpc-port=${CARLA_RPC_PORT:-2000}
+      - -graphicsadapter=${CARLA_GRAPHICS_ADAPTER:-0}
