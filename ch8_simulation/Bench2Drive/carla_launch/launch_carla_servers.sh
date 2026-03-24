@@ -66,24 +66,29 @@ if [ "${1:-}" = "stop" ]; then
     if [ -d "${PID_DIR}" ]; then
         for pidfile in "${PID_DIR}"/*.pid; do
             [ -f "${pidfile}" ] || continue
-            pgid=$(cat "${pidfile}")
+            pid=$(cat "${pidfile}")
             name=$(basename "${pidfile}" .pid)
-            # Kill the entire process group (shell wrapper + CarlaUE4-Linux-Shipping)
-            if kill -0 -"${pgid}" 2>/dev/null; then
-                echo "  Stopping ${name} (PGID ${pgid})..."
-                kill -- -"${pgid}" 2>/dev/null || true
+            # Extract port from filename (carla_gpuX_portYYYYY)
+            port=$(echo "${name}" | grep -oP 'port\K[0-9]+')
+            # Kill all CarlaUE4 processes matching this port
+            local_pids=$(pgrep -f "CarlaUE4.*-carla-rpc-port=${port}\\b" 2>/dev/null || true)
+            if [ -n "${local_pids}" ]; then
+                echo "  Stopping ${name} (PIDs: $(echo ${local_pids} | tr '\n' ' '))..."
+                echo "${local_pids}" | xargs kill 2>/dev/null || true
                 # Wait up to 10s for graceful shutdown
                 for _ in $(seq 1 10); do
-                    kill -0 -"${pgid}" 2>/dev/null || break
+                    remaining=$(pgrep -f "CarlaUE4.*-carla-rpc-port=${port}\\b" 2>/dev/null || true)
+                    [ -z "${remaining}" ] && break
                     sleep 1
                 done
                 # Force kill if still alive
-                if kill -0 -"${pgid}" 2>/dev/null; then
-                    echo "  Force killing ${name} (PGID ${pgid})..."
-                    kill -9 -- -"${pgid}" 2>/dev/null || true
+                remaining=$(pgrep -f "CarlaUE4.*-carla-rpc-port=${port}\\b" 2>/dev/null || true)
+                if [ -n "${remaining}" ]; then
+                    echo "  Force killing ${name}..."
+                    echo "${remaining}" | xargs kill -9 2>/dev/null || true
                 fi
             else
-                echo "  ${name} (PGID ${pgid}) already stopped."
+                echo "  ${name} already stopped."
             fi
             rm -f "${pidfile}"
         done
@@ -103,12 +108,14 @@ if [ "${1:-}" = "status" ]; then
         for pidfile in "${PID_DIR}"/*.pid; do
             [ -f "${pidfile}" ] || continue
             found=true
-            pgid=$(cat "${pidfile}")
+            pid=$(cat "${pidfile}")
             name=$(basename "${pidfile}" .pid)
-            if kill -0 -"${pgid}" 2>/dev/null; then
-                echo "  ✓ ${name} (PGID ${pgid}) — running"
+            port=$(echo "${name}" | grep -oP 'port\K[0-9]+')
+            carla_pid=$(pgrep -f "CarlaUE4-Linux-Shipping.*-carla-rpc-port=${port}\\b" 2>/dev/null | head -1 || true)
+            if [ -n "${carla_pid}" ]; then
+                echo "  ✓ ${name} (PID ${carla_pid}) — running"
             else
-                echo "  ✗ ${name} (PGID ${pgid}) — stopped"
+                echo "  ✗ ${name} — stopped"
             fi
         done
         if [ "${found}" = false ]; then
@@ -120,6 +127,156 @@ if [ "${1:-}" = "status" ]; then
     exit 0
 fi
 
+# ── Restart-dead mode: restart only crashed CARLA servers ──
+if [ "${1:-}" = "restart-dead" ]; then
+    validate_carla
+    mkdir -p "${PID_DIR}"
+    echo "Checking for crashed CARLA servers and restarting them..."
+    restarted=0
+    for (( i=0; i<NUM_GPUS; i++ )); do
+        GPU_ID=${GPU_LIST[$i]}
+        PORT=$((CARLA_BASE_PORT + i * CARLA_PORT_STEP))
+        PROCESS_NAME="carla_gpu${GPU_ID}_port${PORT}"
+        carla_pid=$(pgrep -f "CarlaUE4-Linux-Shipping.*-carla-rpc-port=${PORT}\\b" 2>/dev/null | head -1 || true)
+        if [ -n "${carla_pid}" ]; then
+            echo "  ✓ GPU ${GPU_ID} port ${PORT} — already running (PID ${carla_pid})"
+        else
+            echo "  ✗ GPU ${GPU_ID} port ${PORT} — dead, restarting..."
+            if launch_one_carla "${i}"; then
+                restarted=$((restarted + 1))
+            fi
+        fi
+    done
+    echo ""
+    echo "Restarted ${restarted} CARLA server(s)."
+    exit 0
+fi
+
+# ── Health-check settings ──
+# Maximum time (seconds) to wait for each CARLA server's RPC port to open.
+CARLA_READY_TIMEOUT="${CARLA_READY_TIMEOUT:-120}"
+# Seconds between readiness probes.
+CARLA_PROBE_INTERVAL="${CARLA_PROBE_INTERVAL:-5}"
+# Maximum number of restart attempts per server.
+CARLA_MAX_RETRIES="${CARLA_MAX_RETRIES:-3}"
+
+# find_carla_pid PORT
+#   Finds the PID of the CarlaUE4-Linux-Shipping process listening on PORT.
+#   CarlaUE4.sh is a thin shell wrapper that forks the real UE4 binary;
+#   the wrapper exits almost immediately, so we must track the child.
+#   Returns the PID via stdout, or empty string if not found.
+find_carla_pid() {
+    local port="$1"
+    # Look for CarlaUE4-Linux-Shipping with the matching port argument
+    pgrep -f "CarlaUE4-Linux-Shipping.*-carla-rpc-port=${port}\\b" 2>/dev/null | head -1
+}
+
+# kill_carla_by_port PORT
+#   Kills any CarlaUE4 processes (both shell wrapper and binary) for the given port.
+kill_carla_by_port() {
+    local port="$1"
+    # Kill the binary
+    local pids
+    pids=$(pgrep -f "CarlaUE4.*-carla-rpc-port=${port}\\b" 2>/dev/null || true)
+    if [ -n "${pids}" ]; then
+        echo "${pids}" | xargs kill -9 2>/dev/null || true
+    fi
+}
+
+# wait_for_port HOST PORT TIMEOUT_SEC PROBE_INTERVAL_SEC
+#   Polls until TCP connection to HOST:PORT succeeds, or TIMEOUT_SEC expires.
+#   Also checks that the CARLA binary process is still alive each probe.
+#   Returns 0 on success, 1 on timeout/crash.
+wait_for_port() {
+    local host="$1" port="$2" timeout="$3" interval="$4"
+    local elapsed=0
+    while (( elapsed < timeout )); do
+        # Find the real CarlaUE4-Linux-Shipping PID
+        local carla_pid
+        carla_pid=$(find_carla_pid "${port}")
+        if [ -z "${carla_pid}" ]; then
+            # The shell wrapper may still be spawning the binary; give it a moment
+            if (( elapsed > 30 )); then
+                echo "  [FAIL] No CarlaUE4-Linux-Shipping process found for port ${port} after ${elapsed}s."
+                return 1
+            fi
+        fi
+        # Try TCP connection (timeout 2s)
+        if timeout 2 bash -c "echo > /dev/tcp/${host}/${port}" 2>/dev/null; then
+            return 0
+        fi
+        sleep "${interval}"
+        elapsed=$((elapsed + interval))
+    done
+    echo "  [FAIL] Port ${port} not ready after ${timeout}s."
+    return 1
+}
+
+# launch_one_carla INDEX
+#   Launches a single CARLA server and waits for it to become ready.
+#   Returns 0 on success, 1 on failure after all retries exhausted.
+launch_one_carla() {
+    local i="$1"
+    local GPU_ID=${GPU_LIST[$i]}
+    local PORT=$((CARLA_BASE_PORT + i * CARLA_PORT_STEP))
+    local PROCESS_NAME="carla_gpu${GPU_ID}_port${PORT}"
+    local LOG_FILE="${SCRIPT_DIR}/${PROCESS_NAME}.log"
+
+    for (( attempt=1; attempt<=CARLA_MAX_RETRIES; attempt++ )); do
+        echo -e "\033[32m[${i}/${NUM_GPUS}] GPU ${GPU_ID} → port ${PORT} (attempt ${attempt}/${CARLA_MAX_RETRIES})\033[0m"
+
+        # Kill previous attempt if still around
+        kill_carla_by_port "${PORT}"
+        sleep 2
+
+        # Launch CARLA with dedicated GPU via -graphicsadapter=GPU_ID.
+        # Use nohup so it survives if the launching shell exits.
+        nohup "${CARLA_SH}" \
+            -RenderOffScreen \
+            -nosound \
+            -carla-rpc-port="${PORT}" \
+            -graphicsadapter="${GPU_ID}" \
+            > "${LOG_FILE}" 2>&1 &
+
+        local WRAPPER_PID=$!
+        echo "  Wrapper PID: ${WRAPPER_PID}, Log: ${LOG_FILE}"
+
+        # Give the wrapper a moment to fork the real binary
+        sleep 5
+
+        # Find the real CarlaUE4-Linux-Shipping PID
+        local CARLA_PID
+        CARLA_PID=$(find_carla_pid "${PORT}")
+        if [ -n "${CARLA_PID}" ]; then
+            echo "  CarlaUE4-Linux-Shipping PID: ${CARLA_PID}"
+            echo "${CARLA_PID}" > "${PID_DIR}/${PROCESS_NAME}.pid"
+        else
+            echo "  (binary PID not yet found, will poll...)"
+            echo "${WRAPPER_PID}" > "${PID_DIR}/${PROCESS_NAME}.pid"
+        fi
+
+        # Wait for RPC port to become reachable
+        echo "  Waiting for port ${PORT} (timeout ${CARLA_READY_TIMEOUT}s)..."
+        if wait_for_port "localhost" "${PORT}" "${CARLA_READY_TIMEOUT}" "${CARLA_PROBE_INTERVAL}"; then
+            # Update PID file with the real binary PID
+            CARLA_PID=$(find_carla_pid "${PORT}")
+            if [ -n "${CARLA_PID}" ]; then
+                echo "${CARLA_PID}" > "${PID_DIR}/${PROCESS_NAME}.pid"
+            fi
+            echo -e "  \033[32m✓ GPU ${GPU_ID} port ${PORT} ready (PID ${CARLA_PID}).\033[0m"
+            return 0
+        fi
+
+        echo -e "  \033[31m✗ GPU ${GPU_ID} port ${PORT} failed (attempt ${attempt}).\033[0m"
+        # Clean up the failed process
+        kill_carla_by_port "${PORT}"
+        sleep 2
+    done
+
+    echo -e "\033[31m[ERROR] GPU ${GPU_ID} port ${PORT}: all ${CARLA_MAX_RETRIES} attempts failed.\033[0m"
+    return 1
+}
+
 # ── Launch mode ──
 validate_carla
 mkdir -p "${PID_DIR}"
@@ -130,53 +287,41 @@ echo " CARLA path      : ${CARLA_HOST_PATH}"
 echo " GPU list        : ${EVAL_GPUS}"
 echo " Base port       : ${CARLA_BASE_PORT}"
 echo " Port step       : ${CARLA_PORT_STEP}"
+echo " Ready timeout   : ${CARLA_READY_TIMEOUT}s"
+echo " Max retries     : ${CARLA_MAX_RETRIES}"
 echo "============================================================"
 
+FAILED_GPUS=()
 for (( i=0; i<NUM_GPUS; i++ )); do
-    GPU_ID=${GPU_LIST[$i]}
-    PORT=$((CARLA_BASE_PORT + i * CARLA_PORT_STEP))
-    PROCESS_NAME="carla_gpu${GPU_ID}_port${PORT}"
-    LOG_FILE="${SCRIPT_DIR}/${PROCESS_NAME}.log"
-
-    echo -e "\033[32m[${i}/${NUM_GPUS}] GPU ${GPU_ID} → port ${PORT}\033[0m"
-
-    # Launch CARLA with dedicated GPU via -graphicsadapter=GPU_ID.
-    # setsid creates a new process group so we can kill the entire group later.
-    setsid nohup "${CARLA_SH}" \
-        -RenderOffScreen \
-        -nosound \
-        -carla-rpc-port="${PORT}" \
-        -graphicsadapter="${GPU_ID}" \
-        > "${LOG_FILE}" 2>&1 &
-
-    CARLA_PID=$!
-    # Store the PGID (= PID of the setsid leader) for group-kill on stop
-    echo "${CARLA_PID}" > "${PID_DIR}/${PROCESS_NAME}.pid"
-    echo "  PGID: ${CARLA_PID}, Log: ${LOG_FILE}"
-
-    sleep 2
-done
-
-echo ""
-echo "============================================================"
-echo " All CARLA servers launched. Waiting 30s for initialization..."
-echo "============================================================"
-sleep 30
-
-echo ""
-echo "CARLA servers ready. Port mapping:"
-for (( i=0; i<NUM_GPUS; i++ )); do
-    GPU_ID=${GPU_LIST[$i]}
-    PORT=$((CARLA_BASE_PORT + i * CARLA_PORT_STEP))
-    PROCESS_NAME="carla_gpu${GPU_ID}_port${PORT}"
-    PGID=$(cat "${PID_DIR}/${PROCESS_NAME}.pid" 2>/dev/null || echo "?")
-    if kill -0 -"${PGID}" 2>/dev/null; then
-        STATUS="running"
-    else
-        STATUS="FAILED (check ${SCRIPT_DIR}/${PROCESS_NAME}.log)"
+    if ! launch_one_carla "${i}"; then
+        FAILED_GPUS+=("${GPU_LIST[$i]}")
     fi
-    echo "  [${i}] GPU ${GPU_ID} → localhost:${PORT}  (PGID ${PGID}, ${STATUS})"
 done
+
 echo ""
-echo "To stop:   bash $(basename "$0") stop"
-echo "To status: bash $(basename "$0") status"
+echo "============================================================"
+echo " CARLA server launch summary"
+echo "============================================================"
+for (( i=0; i<NUM_GPUS; i++ )); do
+    GPU_ID=${GPU_LIST[$i]}
+    PORT=$((CARLA_BASE_PORT + i * CARLA_PORT_STEP))
+    PROCESS_NAME="carla_gpu${GPU_ID}_port${PORT}"
+    STORED_PID=$(cat "${PID_DIR}/${PROCESS_NAME}.pid" 2>/dev/null || echo "?")
+    if [ "${STORED_PID}" != "?" ] && kill -0 "${STORED_PID}" 2>/dev/null; then
+        STATUS="\033[32mrunning (PID ${STORED_PID})\033[0m"
+    else
+        STATUS="\033[31mFAILED (check ${SCRIPT_DIR}/${PROCESS_NAME}.log)\033[0m"
+    fi
+    echo -e "  [${i}] GPU ${GPU_ID} → localhost:${PORT}  ${STATUS}"
+done
+
+if [ ${#FAILED_GPUS[@]} -gt 0 ]; then
+    echo ""
+    echo -e "\033[31m[WARNING] Failed GPUs: ${FAILED_GPUS[*]}\033[0m"
+    echo -e "\033[31m          Check logs above for details.\033[0m"
+fi
+
+echo ""
+echo "To stop:         bash $(basename "$0") stop"
+echo "To status:       bash $(basename "$0") status"
+echo "To restart dead: bash $(basename "$0") restart-dead"
