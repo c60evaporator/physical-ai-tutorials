@@ -60,98 +60,6 @@ validate_carla() {
     fi
 }
 
-# ── Stop mode ──
-if [ "${1:-}" = "stop" ]; then
-    echo "Stopping all CARLA host processes..."
-    if [ -d "${PID_DIR}" ]; then
-        for pidfile in "${PID_DIR}"/*.pid; do
-            [ -f "${pidfile}" ] || continue
-            pid=$(cat "${pidfile}")
-            name=$(basename "${pidfile}" .pid)
-            # Extract port from filename (carla_gpuX_portYYYYY)
-            port=$(echo "${name}" | grep -oP 'port\K[0-9]+')
-            # Kill all CarlaUE4 processes matching this port
-            local_pids=$(pgrep -f "CarlaUE4.*-carla-rpc-port=${port}\\b" 2>/dev/null || true)
-            if [ -n "${local_pids}" ]; then
-                echo "  Stopping ${name} (PIDs: $(echo ${local_pids} | tr '\n' ' '))..."
-                echo "${local_pids}" | xargs kill 2>/dev/null || true
-                # Wait up to 10s for graceful shutdown
-                for _ in $(seq 1 10); do
-                    remaining=$(pgrep -f "CarlaUE4.*-carla-rpc-port=${port}\\b" 2>/dev/null || true)
-                    [ -z "${remaining}" ] && break
-                    sleep 1
-                done
-                # Force kill if still alive
-                remaining=$(pgrep -f "CarlaUE4.*-carla-rpc-port=${port}\\b" 2>/dev/null || true)
-                if [ -n "${remaining}" ]; then
-                    echo "  Force killing ${name}..."
-                    echo "${remaining}" | xargs kill -9 2>/dev/null || true
-                fi
-            else
-                echo "  ${name} already stopped."
-            fi
-            rm -f "${pidfile}"
-        done
-        rmdir "${PID_DIR}" 2>/dev/null || true
-    else
-        echo "  No PID directory found. Nothing to stop."
-    fi
-    echo "Done."
-    exit 0
-fi
-
-# ── Status mode ──
-if [ "${1:-}" = "status" ]; then
-    echo "CARLA host processes:"
-    if [ -d "${PID_DIR}" ]; then
-        found=false
-        for pidfile in "${PID_DIR}"/*.pid; do
-            [ -f "${pidfile}" ] || continue
-            found=true
-            pid=$(cat "${pidfile}")
-            name=$(basename "${pidfile}" .pid)
-            port=$(echo "${name}" | grep -oP 'port\K[0-9]+')
-            carla_pid=$(pgrep -f "CarlaUE4-Linux-Shipping.*-carla-rpc-port=${port}\\b" 2>/dev/null | head -1 || true)
-            if [ -n "${carla_pid}" ]; then
-                echo "  ✓ ${name} (PID ${carla_pid}) — running"
-            else
-                echo "  ✗ ${name} — stopped"
-            fi
-        done
-        if [ "${found}" = false ]; then
-            echo "  No CARLA processes tracked."
-        fi
-    else
-        echo "  No PID directory found."
-    fi
-    exit 0
-fi
-
-# ── Restart-dead mode: restart only crashed CARLA servers ──
-if [ "${1:-}" = "restart-dead" ]; then
-    validate_carla
-    mkdir -p "${PID_DIR}"
-    echo "Checking for crashed CARLA servers and restarting them..."
-    restarted=0
-    for (( i=0; i<NUM_GPUS; i++ )); do
-        GPU_ID=${GPU_LIST[$i]}
-        PORT=$((CARLA_BASE_PORT + i * CARLA_PORT_STEP))
-        PROCESS_NAME="carla_gpu${GPU_ID}_port${PORT}"
-        carla_pid=$(pgrep -f "CarlaUE4-Linux-Shipping.*-carla-rpc-port=${PORT}\\b" 2>/dev/null | head -1 || true)
-        if [ -n "${carla_pid}" ]; then
-            echo "  ✓ GPU ${GPU_ID} port ${PORT} — already running (PID ${carla_pid})"
-        else
-            echo "  ✗ GPU ${GPU_ID} port ${PORT} — dead, restarting..."
-            if launch_one_carla "${i}"; then
-                restarted=$((restarted + 1))
-            fi
-        fi
-    done
-    echo ""
-    echo "Restarted ${restarted} CARLA server(s)."
-    exit 0
-fi
-
 # ── Health-check settings ──
 # Maximum time (seconds) to wait for each CARLA server's RPC port to open.
 CARLA_READY_TIMEOUT="${CARLA_READY_TIMEOUT:-120}"
@@ -276,6 +184,98 @@ launch_one_carla() {
     echo -e "\033[31m[ERROR] GPU ${GPU_ID} port ${PORT}: all ${CARLA_MAX_RETRIES} attempts failed.\033[0m"
     return 1
 }
+
+# ── Stop mode ──
+if [ "${1:-}" = "stop" ]; then
+    echo "Stopping all CARLA host processes..."
+    if [ -d "${PID_DIR}" ]; then
+        for pidfile in "${PID_DIR}"/*.pid; do
+            [ -f "${pidfile}" ] || continue
+            pid=$(cat "${pidfile}")
+            name=$(basename "${pidfile}" .pid)
+            # Extract port from filename (carla_gpuX_portYYYYY)
+            port=$(echo "${name}" | grep -oP 'port\K[0-9]+')
+            # Kill all CarlaUE4 processes matching this port
+            local_pids=$(pgrep -f "CarlaUE4.*-carla-rpc-port=${port}\\b" 2>/dev/null || true)
+            if [ -n "${local_pids}" ]; then
+                echo "  Stopping ${name} (PIDs: $(echo ${local_pids} | tr '\n' ' '))..."
+                echo "${local_pids}" | xargs kill 2>/dev/null || true
+                # Wait up to 10s for graceful shutdown
+                for _ in $(seq 1 10); do
+                    remaining=$(pgrep -f "CarlaUE4.*-carla-rpc-port=${port}\\b" 2>/dev/null || true)
+                    [ -z "${remaining}" ] && break
+                    sleep 1
+                done
+                # Force kill if still alive
+                remaining=$(pgrep -f "CarlaUE4.*-carla-rpc-port=${port}\\b" 2>/dev/null || true)
+                if [ -n "${remaining}" ]; then
+                    echo "  Force killing ${name}..."
+                    echo "${remaining}" | xargs kill -9 2>/dev/null || true
+                fi
+            else
+                echo "  ${name} already stopped."
+            fi
+            rm -f "${pidfile}"
+        done
+        rmdir "${PID_DIR}" 2>/dev/null || true
+    else
+        echo "  No PID directory found. Nothing to stop."
+    fi
+    echo "Done."
+    exit 0
+fi
+
+# ── Status mode ──
+if [ "${1:-}" = "status" ]; then
+    echo "CARLA host processes:"
+    if [ -d "${PID_DIR}" ]; then
+        found=false
+        for pidfile in "${PID_DIR}"/*.pid; do
+            [ -f "${pidfile}" ] || continue
+            found=true
+            pid=$(cat "${pidfile}")
+            name=$(basename "${pidfile}" .pid)
+            port=$(echo "${name}" | grep -oP 'port\K[0-9]+')
+            carla_pid=$(pgrep -f "CarlaUE4-Linux-Shipping.*-carla-rpc-port=${port}\\b" 2>/dev/null | head -1 || true)
+            if [ -n "${carla_pid}" ]; then
+                echo "  ✓ ${name} (PID ${carla_pid}) — running"
+            else
+                echo "  ✗ ${name} — stopped"
+            fi
+        done
+        if [ "${found}" = false ]; then
+            echo "  No CARLA processes tracked."
+        fi
+    else
+        echo "  No PID directory found."
+    fi
+    exit 0
+fi
+
+# ── Restart-dead mode: restart only crashed CARLA servers ──
+if [ "${1:-}" = "restart-dead" ]; then
+    validate_carla
+    mkdir -p "${PID_DIR}"
+    echo "Checking for crashed CARLA servers and restarting them..."
+    restarted=0
+    for (( i=0; i<NUM_GPUS; i++ )); do
+        GPU_ID=${GPU_LIST[$i]}
+        PORT=$((CARLA_BASE_PORT + i * CARLA_PORT_STEP))
+        PROCESS_NAME="carla_gpu${GPU_ID}_port${PORT}"
+        carla_pid=$(pgrep -f "CarlaUE4-Linux-Shipping.*-carla-rpc-port=${PORT}\\b" 2>/dev/null | head -1 || true)
+        if [ -n "${carla_pid}" ]; then
+            echo "  ✓ GPU ${GPU_ID} port ${PORT} — already running (PID ${carla_pid})"
+        else
+            echo "  ✗ GPU ${GPU_ID} port ${PORT} — dead, restarting..."
+            if launch_one_carla "${i}"; then
+                restarted=$((restarted + 1))
+            fi
+        fi
+    done
+    echo ""
+    echo "Restarted ${restarted} CARLA server(s)."
+    exit 0
+fi
 
 # ── Launch mode ──
 validate_carla
