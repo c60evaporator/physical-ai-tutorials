@@ -1,0 +1,62 @@
+services:
+  bench2drive-dev:
+    image: "${IMAGE_NAME:-leaderboard-dev}:${IMAGE_TAG:-latest}"
+    # docker build options
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # --build-arg option
+      args:
+        # Conda settings
+        MINIFORGE_VERSION: "${MINIFORGE_VERSION:-24.11.0-1}"
+        # Mounting folders
+        CARLA_ROOT: "${CARLA_ROOT:-/workspace/carla}"
+        SCENARIO_RUNNER_ROOT: "${SCENARIO_RUNNER_ROOT:-/workspace/scenario_runner}"
+        LEADERBOARD_ROOT: "${LEADERBOARD_ROOT:-/workspace/leaderboard}"
+        TEAM_CODE_ROOT: "${TEAM_CODE_ROOT:-/workspace/team_code}"
+        # Match host UID/GID to avoid permission issues on bind mounts
+        USERNAME: "${USERNAME:-developer}"
+        UID: "${HOST_UID:-1000}"
+        GID: "${HOST_GID:-1000}"
+
+        # Proxy settings (if needed)
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        http_proxy: "${HTTP_PROXY:-}"
+
+    # Container name (--name option)
+    container_name: leaderboard_dev
+    # Set resource sharing to host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host  # --ipc
+    network_mode: host  # Use host network to connect to CARLA on host
+    shm_size: "${SHM_SIZE:-16g}"  # --shm-size
+    # Stable operation for development
+    init: true  # --init option
+    stdin_open: true  # -i option
+    tty: true  # -t option
+    # Set startup directory
+    working_dir: /workspace
+
+    # Environment variables (-e option)
+    environment:
+      # Mounting folders
+      CARLA_ROOT: "${CARLA_ROOT:-/workspace/carla}"
+      SCENARIO_RUNNER_ROOT: "${SCENARIO_RUNNER_ROOT:-/workspace/scenario_runner}"
+      LEADERBOARD_ROOT: "${LEADERBOARD_ROOT:-/workspace/leaderboard}"
+      TEAM_CODE_ROOT: "${TEAM_CODE_ROOT:-/workspace/team_code}"
+    
+    # Volume mounts
+    volumes:
+      # CARLA PythonAPI on host
+      - "${CARLA_HOST_PATH:-~./carla}:${CARLA_ROOT:-/workspace/carla}"
+      # Leaderboard codes
+      - ./scenario_runner:${SCENARIO_RUNNER_ROOT:-/workspace/scenario_runner}
+      - ./leaderboard:${LEADERBOARD_ROOT:-/workspace/leaderboard}
+      - ./team_code:${TEAM_CODE_ROOT:-/workspace/team_code}
