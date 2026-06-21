@@ -1,0 +1,13 @@
+
+
+length=${#GPU_RANK_LIST[@]}
+for ((i=0; i<$length; i++ )); do
+    PORT=$((BASE_PORT + i * 150))
+    TM_PORT=$((BASE_TM_PORT + i * 150))
+    ROUTES="${BASE_ROUTES}_${TASK_LIST[$i]}_${ALGO}_${PLANNER_TYPE}.xml"
+    CHECKPOINT_ENDPOINT="${ALGO}_b2d_${PLANNER_TYPE}/${BASE_CHECKPOINT_ENDPOINT}_${TASK_LIST[$i]}.json"
+    GPU_RANK=${GPU_RANK_LIST[$i]}
+    CUDA_VISIBLE_DEVICES=${GPU_RANK} bash -e leaderboard/scripts/evaluate.sh $PORT $TM_PORT $IS_BENCH2DRIVE $ROUTES $TEAM_AGENT $TEAM_CONFIG $CHECKPOINT_ENDPOINT $SAVE_PATH $PLANNER_TYPE $GPU_RANK 2>&1 > ${BASE_ROUTES}_${TASK_LIST[$i]}_${ALGO}_${PLANNER_TYPE}.log &
+    sleep 5
+done
+wait

@@ -5,4 +5,7 @@ ch8_simulation/Bench2Drive/Bench2Drive
 ch8_simulation/Bench2Drive/Bench2DriveZoo
 ch8_simulation/Bench2Drive/data
 
+ch8_simulation/CarlaGarage/data/*
+!/ch8_simulation/CarlaGarage/data/.gitkeep
+
 .env

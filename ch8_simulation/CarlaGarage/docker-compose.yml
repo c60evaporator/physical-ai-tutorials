@@ -1,0 +1,71 @@
+services:
+  carlagarage-dev:
+    image: "${IMAGE_NAME:-carlagarage-dev}:${IMAGE_TAG:-latest}"
+    # docker build options
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # --build-arg option
+      args:
+        # CUDA and Ubuntu Versions
+        CUDA_VERSION: "${CUDA_VERSION:-12.1.1}"
+        TORCH_CUDA: "${TORCH_CUDA:-cu121}"
+        UBUNTU_VERSION: "${UBUNTU_VERSION:-22.04}"
+        # Conda settings
+        MINIFORGE_VERSION: "${MINIFORGE_VERSION:-24.11.0-1}"
+        # Mounting folders
+        CARLA_ROOT: "${CARLA_ROOT:-/workspace/carla}"
+        CARLA_GARAGE_ROOT: "${CARLA_GARAGE_ROOT:-/workspace/carla_garage}"
+        LEADERBOARD_ROOT: "${CARLA_GARAGE_ROOT:-/workspace/carla_garage}/leaderboard"
+        TEAM_CODE_ROOT: "${CARLA_GARAGE_ROOT:-/workspace/carla_garage}/team_code"
+        # Match host UID/GID to avoid permission issues on bind mounts
+        USERNAME: "${USERNAME:-developer}"
+        UID: "${HOST_UID:-1000}"
+        GID: "${HOST_GID:-1000}"
+
+        # Proxy settings (if needed)
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        http_proxy: "${HTTP_PROXY:-}"
+
+    # Container name (--name option)
+    container_name: carlagarage_dev
+    # Set resource sharing to host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host  # --ipc
+    network_mode: host  # Use host network to connect to CARLA on host
+    shm_size: "${SHM_SIZE:-16g}"  # --shm-size
+    # Stable operation for development
+    init: true  # --init option
+    stdin_open: true  # -i option
+    tty: true  # -t option
+    # Set startup directory
+    working_dir: /workspace
+
+    # Environment variables (-e option)
+    environment:
+      # Base path for project data inside the container
+      PROJECT_DATA_ROOT: ${PROJECT_DATA_ROOT:-/workspace/data}
+      # GPU list and port settings for multi-GPU evaluation
+      # (shared with carla/launch_carla_servers_host.sh)
+      EVAL_GPUS: "${EVAL_GPUS:-0}"
+      CARLA_BASE_PORT: "${CARLA_BASE_PORT:-30000}"
+      CARLA_BASE_TM_PORT: "${CARLA_BASE_TM_PORT:-50000}"
+      CARLA_PORT_STEP: "${CARLA_PORT_STEP:-150}"
+    
+    # Volume mounts
+    volumes:
+      # CARLA PythonAPI on host
+      - "${CARLA_HOST_PATH:-~./carla}:${CARLA_ROOT:-/workspace/carla}"
+      # Carla Garage codes
+      - ./carla_garage:${CARLA_GARAGE_ROOT:-/workspace/carla_garage}
+      # Tools
+      - ./tools:/workspace/tools
+      # Project data (datasets, logs, etc.)
+      - ./data:${PROJECT_DATA_ROOT:-/workspace/data}
