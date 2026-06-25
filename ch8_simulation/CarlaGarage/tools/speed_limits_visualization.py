@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # ---- 読み込み ----
-array = np.load('UE4_FIELD_TOWN_speed_limits.npy', allow_pickle=True)
+array = np.load('../carla_garage/team_code/speed_limits/Town01_speed_limits.npy', allow_pickle=True)
 data = array.item()  # shape=() の object 配列から dict を取り出す
 
 speed_limits: np.ndarray = data['speed_limits']  # shape: (N,)       各ウェイポイントの制限速度 [km/h]
@@ -44,3 +44,5 @@ ax.set_ylabel("UE4 Y [cm]")
 ax.set_aspect('equal')
 plt.tight_layout()
 plt.show()
+
+# %%
