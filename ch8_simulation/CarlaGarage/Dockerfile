@@ -91,9 +91,9 @@ ENV PYTHONPATH "${CARLA_ROOT}/PythonAPI/carla":"${SCENARIO_RUNNER_ROOT}":"${LEAD
 ####                     BEGINNING OF AGENT SPECIFIC COMMANDS                           ####
 ############################################################################################
 
-ENV TEAM_AGENT ${TEAM_CODE_ROOT}/npc_agent.py
+# ENV TEAM_AGENT ${TEAM_CODE_ROOT}/sensor_agent.py
 # ENV TEAM_CONFIG ${TEAM_CODE_ROOT}/YOUR_CONFIG_FILE
-ENV CHALLENGE_TRACK_CODENAME SENSORS
+# ENV CHALLENGE_TRACK_CODENAME SENSORS
 
 ############################################################################################
 ####                        END OF AGENT SPECIFIC COMMANDS                              ####
