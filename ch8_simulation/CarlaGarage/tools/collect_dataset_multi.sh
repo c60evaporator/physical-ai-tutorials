@@ -1,11 +1,50 @@
 #!/bin/bash
 # This script is used to collect dataset for PDM-Lite in CarlaGarage.
+# Getting --resume option
+set -euo pipefail
+RESUME=0
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --resume)
+      RESUME=1
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      exit 1
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
+  esac
+done
+set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"  # Restore positional parameters so $1, $2 work as expected
+
 ROUTES_DIR="${1:?Please specify the routes directory. Usage: $0 <routes_dir>}" # Directory containing route XML files for dataset collection
 COLLECTION_ROUTES="$(basename "$(realpath "$ROUTES_DIR")")"  # Use folder name of ROUTES_DIR as route definition name
+AGENT_NAME=$2
+
+if [ "$AGENT_NAME" = "pdmlite" ]; then
+    TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/team_code/data_agent.py}  # PDM-Lite data collection agent
+else
+    TEAM_AGENT=${TEAM_AGENT:?Please set TEAM_AGENT environment variable for agent '${AGENT_NAME}'.}
+fi
 
 # Create DATA_SAVE_DIR based on COLLECTION_ROUTES and timestamp
 DATA_SAVE_ROOT=${PROJECT_DATA_ROOT:-/workspace/data}/data_collection/carla_garage
-CREATE_NEW=${CREATE_NEW:-1}  # If set to 1, create a new timestamped directory; if set to 0, use the latest existing directory.
+# --resume flag implies reusing the latest existing directory
+if [ "${RESUME}" -eq 1 ]; then
+    CREATE_NEW=${CREATE_NEW:-0}
+else
+    CREATE_NEW=${CREATE_NEW:-1}
+fi
+# If set to 1, create a new timestamped directory; if set to 0, use the latest existing directory.
 if [ "${CREATE_NEW}" = "1" ]; then
     TIMESTAMP=$(date +%Y%m%d%H%M)
     DATA_SAVE_DIR=${DATA_SAVE_ROOT}/${COLLECTION_ROUTES}_pdmlite_${TIMESTAMP}
@@ -22,7 +61,8 @@ mkdir -p \
     "${DATA_SAVE_DIR}/data" \
     "${DATA_SAVE_DIR}/results"
 
-# ── Port settings (match launch_carla_servers.sh) ──
+# ── CARLA Port settings (match launch_carla_servers.sh) ──
+CARLA_HOST=${CARLA_HOST:-localhost}
 BASE_PORT=${CARLA_BASE_PORT:-30000}
 BASE_TM_PORT=${CARLA_BASE_TM_PORT:-50000}
 PORT_STEP=${CARLA_PORT_STEP:-150}
@@ -91,19 +131,13 @@ for (( i=0; i<NUM_GPUS; i++ )); do
             SAVE_PATH=${DATA_SAVE_DIR}/data/${SCENARIO_TYPE}
             CHECKPOINT_ENDPOINT=${DATA_SAVE_DIR}/results/${SCENARIO_TYPE}/${ROUTEFILE_NUMBER}_result.json
             mkdir -p "$SAVE_PATH" "$(dirname "$CHECKPOINT_ENDPOINT")"
-            echo "[GPU ${GPU_RANK} $(( j - start_idx ))/$((end_idx - start_idx - 1))] ROUTES=${ROUTES}"
+            echo "[GPU ${GPU_RANK} $(( j - start_idx + 1 ))/$((end_idx - start_idx))] ROUTES=${ROUTES}"
 
-            # Launch collect_dataset_pdmlite.sh with `PORT`, `TM_PORT`, `ROUTES`, `TOWN`, `SAVE_PATH`, `CHECKPOINT_ENDPOINT` environment variables
+            TEAM_CONFIG=${ROUTES}  # Set TEAM_CONFIG to the current route XML file for PDM-Lite agent (PDM-Lite uses the route XML file as its config)
+
+            # Run collect_dataset.sh sequentially (no &): one CARLA server per GPU can only handle one route at a time
             CUDA_VISIBLE_DEVICES="${GPU_RANK}" \
-            HOST=localhost \
-            PORT="${PORT}" \
-            TM_PORT="${TM_PORT}" \
-            ROUTES="${ROUTES}" \
-            TOWN="${TOWN}" \
-            SAVE_PATH="${SAVE_PATH}" \
-            CHECKPOINT_ENDPOINT="${CHECKPOINT_ENDPOINT}" \
-            RESUME=1 \
-            bash ${CARLA_GARAGE_ROOT}/../tools/collect_dataset_pdmlite.sh
+            bash -e ${CARLA_GARAGE_ROOT}/../tools/collect_dataset.sh $CARLA_HOST $PORT $TM_PORT $ROUTES $TEAM_AGENT $TEAM_CONFIG $CHECKPOINT_ENDPOINT $SAVE_PATH $RESUME $TOWN
 
         done
     ) &

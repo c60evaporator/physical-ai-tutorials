@@ -1,10 +1,36 @@
 #!/bin/bash
-# This script is used to evaluate the leaderboard with multiple GPUs in CarlaGarage. It splits the route XML files into multiple parts and launches parallel evaluations on different GPUs.
+# This script is used to evaluate the leaderboard with multiple GPUs in CarlaGarage. It splits the route XML files into multiple parts and launches parallel evaluations on different GPUs
+# Getting --resume option
+set -euo pipefail
+RESUME=0
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --resume)
+      RESUME=1
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      exit 1
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
+  esac
+done
+set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"  # Restore positional parameters so $1, $2 work as expected
+
 ROUTES_FILE="${1:?Please specify the routes file (.xml). Usage: $0 <routes_file>}" # Route definition XML file
 EVAL_ROUTES="$(basename "$ROUTES_FILE" .xml)"  # Use file name of ROUTES_FILE as eval_route name
+AGENT_NAME=$2
 
 PRIVILEGED_MODE=${PRIVILEGED_MODE:-0}  # If set to 1, run in privileged mode (using autopilot agent); if set to 0, run in non-privileged mode (using PDM-Lite agent)
-AGENT_NAME=${AGENT_NAME:-tfpp}  # Default to PDM-Lite agent if AGENT_NAME is not set
 
 if [ "$AGENT_NAME" = "pdmlite" ]; then
     PRIVILEGED_MODE=1
@@ -14,7 +40,6 @@ elif [ "$AGENT_NAME" = "tfpp" ]; then
     PRIVILEGED_MODE=0
     TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/team_code/sensor_agent.py}  # Sensor-based agent for evaluation
     TEAM_CONFIG=${TEAM_CONFIG:-${CARLA_GARAGE_ROOT}/team_code/model_ckpt/tfpp/all_towns}  # Pretrained weight folder that include `config.json` and `model_0030_*.pth` for ensemble inference
-
 else
     TEAM_AGENT=${TEAM_AGENT:?Please set TEAM_AGENT environment variable for agent '${AGENT_NAME}'.}
     TEAM_CONFIG=${TEAM_CONFIG:?Please set TEAM_CONFIG environment variable for agent '${AGENT_NAME}'.}
@@ -22,16 +47,24 @@ fi
 
 # Get the evaluation script based on PRIVILEGED_MODE
 if [ "$PRIVILEGED_MODE" -eq 1 ]; then
-    EVAL_SCRIPT=${CARLA_GARAGE_ROOT}/../tools/evaluate_leaderboard_privileged.sh
     CHALLENGE_TRACK_CODENAME=MAP # MAP track for privileged evaluation
+    LEADERBOARD_ROOT=${CARLA_GARAGE_ROOT}/leaderboard_autopilot
+    SCENARIO_RUNNER_ROOT=${CARLA_GARAGE_ROOT}/scenario_runner_autopilot
 else
-    EVAL_SCRIPT=${CARLA_GARAGE_ROOT}/../tools/evaluate_leaderboard_nonprivileged.sh
     CHALLENGE_TRACK_CODENAME=SENSORS # SENSORS track for non-privileged evaluation
+    LEADERBOARD_ROOT=${CARLA_GARAGE_ROOT}/leaderboard
+    SCENARIO_RUNNER_ROOT=${CARLA_GARAGE_ROOT}/scenario_runner
 fi
 
 # Create DATA_SAVE_DIR based on EVAL_ROUTES and timestamp
 DATA_SAVE_ROOT=${PROJECT_DATA_ROOT:-/workspace/data}/evaluation/leaderboard/
-CREATE_NEW=${CREATE_NEW:-1}  # If set to 1, create a new timestamped directory; if set to 0, use the latest existing directory.
+# --resume flag implies reusing the latest existing directory
+if [ "${RESUME}" -eq 1 ]; then
+    CREATE_NEW=${CREATE_NEW:-0}
+else
+    CREATE_NEW=${CREATE_NEW:-1}
+fi
+# If set to 1, create a new timestamped directory; if set to 0, use the latest existing directory.
 if [ "${CREATE_NEW}" = "1" ]; then
     TIMESTAMP=$(date +%Y%m%d%H%M)
     DATA_SAVE_DIR=${DATA_SAVE_ROOT}/${EVAL_ROUTES}_${AGENT_NAME}_${TIMESTAMP}
@@ -48,7 +81,8 @@ mkdir -p \
     "${DATA_SAVE_DIR}/logs" \
     "${DATA_SAVE_DIR}/results"
 
-# ── Port settings (match launch_carla_servers.sh) ──
+# ── CARLA Port settings (match launch_carla_servers.sh) ──
+CARLA_HOST=${CARLA_HOST:-localhost}
 BASE_PORT=${CARLA_BASE_PORT:-30000}
 BASE_TM_PORT=${CARLA_BASE_TM_PORT:-50000}
 PORT_STEP=${CARLA_PORT_STEP:-150}
@@ -77,19 +111,10 @@ for (( i=0; i<NUM_GPUS; i++ )); do
     CHECKPOINT_ENDPOINT=${DATA_SAVE_DIR}/results/result_gpu${i}.json
     mkdir -p "$SAVE_PATH" "$(dirname "$CHECKPOINT_ENDPOINT")"
 
-    # Launch collect_dataset_pdmlite.sh with `PORT`, `TM_PORT`, `ROUTES`, `TOWN`, `SAVE_PATH`, `CHECKPOINT_ENDPOINT` environment variables
+    # Launch evaluate_leaderboard.sh with `PORT`, `TM_PORT`, `ROUTES`, `SAVE_PATH`, `CHECKPOINT_ENDPOINT` environment variables
     CUDA_VISIBLE_DEVICES="${GPU_RANK}" \
-    HOST=localhost \
-    PORT="${PORT}" \
-    TM_PORT="${TM_PORT}" \
-    ROUTES="${ROUTES}" \
-    TOWN="${TOWN}" \
-    SAVE_PATH="${SAVE_PATH}" \
-    CHECKPOINT_ENDPOINT="${CHECKPOINT_ENDPOINT}" \
-    RESUME=1 \
-    TEAM_AGENT="${TEAM_AGENT}" \
-    TEAM_CONFIG="${TEAM_CONFIG}" \
-    bash "${EVAL_SCRIPT}" "${ROUTES}" &
+    bash -e ${CARLA_GARAGE_ROOT}/../tools/evaluate_leaderboard.sh $CARLA_HOST $PORT $TM_PORT $ROUTES $TEAM_AGENT $TEAM_CONFIG $CHECKPOINT_ENDPOINT $SAVE_PATH $RESUME $LEADERBOARD_ROOT $SCENARIO_RUNNER_ROOT $CHALLENGE_TRACK_CODENAME &
+    sleep 5
 done
 
 wait
