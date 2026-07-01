@@ -9,3 +9,4 @@ ch8_simulation/CarlaGarage/data/*
 !/ch8_simulation/CarlaGarage/data/.gitkeep
 
 .env
+__pycache__
