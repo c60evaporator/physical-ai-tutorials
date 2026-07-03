@@ -10,6 +10,7 @@ ch8_simulation/CarlaGarage/data/*
 ch8_simulation/CarlaGarage/data/.venv
 ch8_simulation/CarlaGarage/tools/logs
 ch8_simulation/CarlaGarage/tools/carla_launch/.pids
+ch8_simulation/CarlaGarage/tools/carla_launch/.watchdog.pid
 
 .env
 __pycache__

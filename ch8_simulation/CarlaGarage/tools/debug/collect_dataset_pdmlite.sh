@@ -10,7 +10,7 @@ export SCENARIO_RUNNER_ROOT=${CARLA_GARAGE_ROOT}/scenario_runner_autopilot
 export PYTHONPATH=${CARLA_ROOT:-/workspace/carla}/PythonAPI/carla:${LEADERBOARD_ROOT}:${SCENARIO_RUNNER_ROOT}:${PYTHONPATH}
 
 export ROUTES=${ROUTES:-$CARLA_GARAGE_ROOT/data/lb1_split/ControlLoss/Town01_Scenario1_0.xml}  # Route definition XML file
-export TEAM_AGENT=${CARLA_GARAGE_ROOT}/team_code/data_agent.py  # PDM-Lite agent
+export TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/team_code/data_agent.py}  # PDM-Lite agent
 export TEAM_CONFIG=${ROUTES}
 export REPETITIONS=${REPETITIONS:-1} # multiple evaluation runs (1 means no repetition, 2 means each route is run twice, etc.)
 

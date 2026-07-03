@@ -8,7 +8,8 @@ export TEAM_CONFIG=$6
 export CHECKPOINT_ENDPOINT=$7
 export SAVE_PATH=$8
 export RESUME=$9
-export TOWN=${10}
+export CHALLENGE_TRACK_CODENAME=${10} # SENSORS, MAP, SENSORS_QUALIFIER, MAP_QUALIFIER
+export TOWN=${11}
 
 export TM_SEED=${TM_SEED:-0}
 
@@ -20,8 +21,6 @@ export PYTHONPATH=${CARLA_ROOT:-/workspace/carla}/PythonAPI/carla:${LEADERBOARD_
 export REPETITIONS=${REPETITIONS:-1} # multiple evaluation runs (1 means no repetition, 2 means each route is run twice, etc.)
 
 export DEBUG_CHALLENGE=0
-# Use a script-local override variable to avoid inheriting container default CHALLENGE_TRACK_CODENAME=SENSORS.
-export CHALLENGE_TRACK_CODENAME=${DATASET_TRACK_CODENAME:-MAP} # SENSORS, MAP, SENSORS_QUALIFIER, MAP_QUALIFIER
 export EVALUATION_TIMEOUT=${EVALUATION_TIMEOUT:-600} # seconds
 
 export DATAGEN=1

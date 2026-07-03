@@ -13,9 +13,9 @@ export TEAM_CONFIG=$6
 export CHECKPOINT_ENDPOINT=$7
 export SAVE_PATH=$8
 export RESUME=$9
-export LEADERBOARD_ROOT=${10}
-export SCENARIO_RUNNER_ROOT=${11}
-export CHALLENGE_TRACK_CODENAME=${12}
+export CHALLENGE_TRACK_CODENAME=${10}
+export LEADERBOARD_ROOT=${11}
+export SCENARIO_RUNNER_ROOT=${12}
 
 export TM_SEED=${TM_SEED:-0}
 # Rebuild PYTHONPATH explicitly so imports resolve to autopilot variants.

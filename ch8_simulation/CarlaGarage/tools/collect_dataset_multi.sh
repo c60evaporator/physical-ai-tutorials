@@ -32,8 +32,13 @@ AGENT_NAME=$2
 
 if [ "$AGENT_NAME" = "pdmlite" ]; then
     TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/team_code/data_agent.py}  # PDM-Lite data collection agent
+    CHALLENGE_TRACK_CODENAME=MAP
+elif [ "$AGENT_NAME" = "pdmlite_nuscenes" ]; then
+    TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/team_code/data_agent_nuscenes.py}  # PDM-Lite data collection agent with nuScenes camera rig
+    CHALLENGE_TRACK_CODENAME=MAP_QUALIFIER
 else
     TEAM_AGENT=${TEAM_AGENT:?Please set TEAM_AGENT environment variable for agent '${AGENT_NAME}'.}
+    CHALLENGE_TRACK_CODENAME=${DATASET_TRACK_CODENAME:-MAP_QUALIFIER}
 fi
 
 # Create DATA_SAVE_DIR based on COLLECTION_ROUTES and timestamp
@@ -106,7 +111,7 @@ MAX_RETRIES=${MAX_RETRIES:-5}  # max restart attempts per route before skipping 
 RETRY_WAIT=${RETRY_WAIT:-30}  # seconds to wait before retrying after a crash
 CARLA_WAIT_TIMEOUT=${CARLA_WAIT_TIMEOUT:-1800}  # seconds to wait for CARLA port to reopen (watchdog restart)
 
-# run_route GPU_RANK PORT TM_PORT ROUTES SAVE_PATH CHECKPOINT TOWN
+# run_route GPU_RANK PORT TM_PORT ROUTES SAVE_PATH CHECKPOINT TRACK TOWN
 # Runs collect_dataset.sh with automatic retry on CARLA crash.
 # Output goes to the caller's stdout (redirected to log file by the outer subshell).
 # A route that fails all retries is logged and SKIPPED (return 0) so the GPU
@@ -126,7 +131,8 @@ run_route() {
     local routes="$4"
     local save_path="$5"
     local checkpoint="$6"
-    local town="$7"
+    local track="$7"
+    local town="$8"
     local team_config="${routes}"  # PDM-Lite uses the route XML file as its config
     local route_label
     route_label=$(basename "${routes}" .xml)
@@ -140,7 +146,7 @@ run_route() {
         bash -e "${CARLA_GARAGE_ROOT}/../tools/collect_dataset.sh" \
             "${CARLA_HOST}" "${port}" "${tm_port}" "${routes}" \
             "${TEAM_AGENT}" "${team_config}" "${checkpoint}" "${save_path}" \
-            "${always_resume}" "${town}"
+            "${always_resume}" "${track}" "${town}"
 
         local exit_code=$?
 
@@ -215,7 +221,7 @@ for (( i=0; i<NUM_GPUS; i++ )); do
             TEAM_CONFIG=${ROUTES}  # Set TEAM_CONFIG to the current route XML file for PDM-Lite agent (PDM-Lite uses the route XML file as its config)
 
             # Run collect_dataset.sh with retry/watchdog logic (sequential; one CARLA server per GPU)
-            run_route "${GPU_RANK}" "${PORT}" "${TM_PORT}" "${ROUTES}" "${SAVE_PATH}" "${CHECKPOINT_ENDPOINT}" "${TOWN}"
+            run_route "${GPU_RANK}" "${PORT}" "${TM_PORT}" "${ROUTES}" "${SAVE_PATH}" "${CHECKPOINT_ENDPOINT}" "${CHALLENGE_TRACK_CODENAME}" "${TOWN}"
 
         done
     ) >> "${DATA_SAVE_DIR}/logs/log_gpu${i}.log" 2>&1 &

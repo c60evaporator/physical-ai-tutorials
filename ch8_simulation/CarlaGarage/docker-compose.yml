@@ -65,6 +65,8 @@ services:
       - "${CARLA_HOST_PATH:-~./carla}:${CARLA_ROOT:-/workspace/carla}"
       # Carla Garage codes
       - ./carla_garage:${CARLA_GARAGE_ROOT:-/workspace/carla_garage}
+      # Custom nuScenes-layout data agent (kept outside the upstream clone)
+      - ./team_code/data_agent_nuscenes.py:${CARLA_GARAGE_ROOT:-/workspace/carla_garage}/team_code/data_agent_nuscenes.py
       # Tools
       - ./tools:/workspace/tools
       # Project data (datasets, logs, etc.)

@@ -146,7 +146,7 @@ run_gpu() {
         bash -e "${CARLA_GARAGE_ROOT}/../tools/evaluate_leaderboard.sh" \
             "${CARLA_HOST}" "${PORT}" "${TM_PORT}" "${ROUTES}" \
             "${TEAM_AGENT}" "${TEAM_CONFIG}" "${CHECKPOINT_ENDPOINT}" "${SAVE_PATH}" \
-            "${actual_resume}" "${LEADERBOARD_ROOT}" "${SCENARIO_RUNNER_ROOT}" "${CHALLENGE_TRACK_CODENAME}" \
+            "${actual_resume}" "${CHALLENGE_TRACK_CODENAME}" "${LEADERBOARD_ROOT}" "${SCENARIO_RUNNER_ROOT}" \
             >> "${LOG_FILE}" 2>&1
 
         local exit_code=$?
