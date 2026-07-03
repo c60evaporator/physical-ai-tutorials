@@ -99,22 +99,132 @@ mkdir -p "${DATA_SAVE_DIR}/split_routes"
 cp "${ROUTES_FILE}" "${SPLIT_BASE}.xml"
 python3 "${CARLA_GARAGE_ROOT}/../tools/split_route_xml.py" "${SPLIT_BASE}" "${NUM_GPUS}"
 
-# Iterate over GPUs and launch evaluations in parallel
-for (( i=0; i<NUM_GPUS; i++ )); do
-    PORT=$((BASE_PORT + i * PORT_STEP))
-    TM_PORT=$((BASE_TM_PORT + i * PORT_STEP))
-    GPU_RANK=${GPU_ARRAY[$i]}
-    
-    # Get variables for each GPU
-    ROUTES="${SPLIT_BASE}_${i}.xml"  # Use split route XML file for each GPU
-    SAVE_PATH=${DATA_SAVE_DIR}/logs
-    CHECKPOINT_ENDPOINT=${DATA_SAVE_DIR}/results/result_gpu${i}.json
-    mkdir -p "$SAVE_PATH" "$(dirname "$CHECKPOINT_ENDPOINT")"
+# ── Retry / watchdog parameters ─────────────────────────────────────────────
+MAX_RETRIES=${MAX_RETRIES:-10}  # max evaluator restart attempts per GPU before giving up
+RETRY_WAIT=${RETRY_WAIT:-30}  # seconds to wait before retrying after a crash
+CARLA_WAIT_TIMEOUT=${CARLA_WAIT_TIMEOUT:-1800}  # seconds to wait for CARLA port to reopen (watchdog restart)
+MAX_STUCK=${MAX_STUCK:-3}  # consecutive same-progress failures before logging a warning (force-skip is not applied here — stuck counter is reset instead)
 
-    # Launch evaluate_leaderboard.sh with `PORT`, `TM_PORT`, `ROUTES`, `SAVE_PATH`, `CHECKPOINT_ENDPOINT` environment variables
-    CUDA_VISIBLE_DEVICES="${GPU_RANK}" \
-    bash -e ${CARLA_GARAGE_ROOT}/../tools/evaluate_leaderboard.sh $CARLA_HOST $PORT $TM_PORT $ROUTES $TEAM_AGENT $TEAM_CONFIG $CHECKPOINT_ENDPOINT $SAVE_PATH $RESUME $LEADERBOARD_ROOT $SCENARIO_RUNNER_ROOT $CHALLENGE_TRACK_CODENAME &
-    sleep 5
+# ── Per-GPU evaluation function ───────────────────────────────────────────────
+# Runs evaluate_leaderboard.sh with automatic retry on CARLA crash.
+#
+# Stuck-route detection:
+#   After each non-zero exit, _checkpoint.progress[0] is read from the JSON
+#   checkpoint and compared to the previous value.  If the same index appears
+#   MAX_STUCK times in a row (meaning CARLA crashed before Python could advance
+#   progress), a warning is logged and the counter is reset so the script keeps
+#   retrying rather than looping indefinitely.  MAX_TOTAL_SKIPS is not applied
+#   here because skip_route.py targets B2D checkpoint format.
+#
+# CARLA recovery:
+#   After a crash, the script waits up to CARLA_WAIT_TIMEOUT seconds for the
+#   watchdog (launch_carla_servers.sh) to restart CARLA on this GPU's port.
+run_gpu() {
+    local i="$1"
+    local PORT=$((BASE_PORT + i * PORT_STEP))
+    local TM_PORT=$((BASE_TM_PORT + i * PORT_STEP))
+    local GPU_RANK=${GPU_ARRAY[$i]}
+    local ROUTES="${SPLIT_BASE}_${i}.xml"
+    local SAVE_PATH="${DATA_SAVE_DIR}/logs"
+    local CHECKPOINT_ENDPOINT="${DATA_SAVE_DIR}/results/result_gpu${i}.json"
+    local LOG_FILE="${DATA_SAVE_DIR}/logs/log_gpu${i}.log"
+
+    # After the first failure, all subsequent attempts must pass resume=1
+    # to prevent leaderboard_evaluator.run() from calling clear_records()
+    # and wiping the checkpoint accumulated in previous attempts.
+    local always_resume=${RESUME}
+    local stuck_count=0
+    local last_failed_progress=-1
+
+    set +e
+    for (( attempt=1; attempt<=MAX_RETRIES; attempt++ )); do
+        echo "[gpu${i}] Attempt ${attempt}/${MAX_RETRIES} — GPU ${GPU_RANK} port ${PORT}" | tee -a "${LOG_FILE}"
+
+        local actual_resume=${always_resume}
+
+        CUDA_VISIBLE_DEVICES="${GPU_RANK}" \
+        bash -e "${CARLA_GARAGE_ROOT}/../tools/evaluate_leaderboard.sh" \
+            "${CARLA_HOST}" "${PORT}" "${TM_PORT}" "${ROUTES}" \
+            "${TEAM_AGENT}" "${TEAM_CONFIG}" "${CHECKPOINT_ENDPOINT}" "${SAVE_PATH}" \
+            "${actual_resume}" "${LEADERBOARD_ROOT}" "${SCENARIO_RUNNER_ROOT}" "${CHALLENGE_TRACK_CODENAME}" \
+            >> "${LOG_FILE}" 2>&1
+
+        local exit_code=$?
+
+        if [[ ${exit_code} -eq 0 ]]; then
+            echo "[gpu${i}] All routes completed successfully." | tee -a "${LOG_FILE}"
+            set -e
+            return 0
+        fi
+
+        echo "[gpu${i}] Evaluator exited with code ${exit_code} (attempt ${attempt}/${MAX_RETRIES})." | tee -a "${LOG_FILE}"
+
+        # From this point onwards, pass resume=1 so leaderboard_evaluator does
+        # NOT call clear_records() which would wipe accumulated checkpoint data.
+        always_resume=1
+
+        # ── Stuck-route detection ─────────────────────────────────────────
+        # Read _checkpoint.progress[0] from the checkpoint JSON.
+        # Prints -1 on any parse error (safe fallback: detection does not fire).
+        # ─────────────────────────────────────────────────────────────────
+        local current_progress
+        current_progress=$(python3 -c "
+import json
+try:
+    with open('${CHECKPOINT_ENDPOINT}') as f:
+        d = json.load(f)
+    print(d['_checkpoint']['progress'][0])
+except Exception:
+    print(-1)
+" 2>/dev/null || echo -1)
+
+        if [[ "${current_progress}" != "-1" ]]; then
+            if [[ "${current_progress}" = "${last_failed_progress}" ]]; then
+                stuck_count=$((stuck_count + 1))
+            else
+                stuck_count=1
+                last_failed_progress="${current_progress}"
+            fi
+            echo "[gpu${i}] Same-route failure count=${stuck_count}/${MAX_STUCK} (progress=${current_progress})." | tee -a "${LOG_FILE}"
+
+            if [[ ${stuck_count} -ge ${MAX_STUCK} ]]; then
+                echo "[gpu${i}] WARNING: Route at progress=${current_progress} stuck ${stuck_count} times in a row. Resetting counter and continuing..." | tee -a "${LOG_FILE}"
+                stuck_count=0
+            fi
+        fi
+
+        # ── Waiting for CARLA to restart ─────────────────────────────────────────
+        # Watchdog monitors the TCP port until the crashed CARLA instance is restarted.
+        # ─────────────────────────────────────────────────────────────────
+        if [[ ${attempt} -lt ${MAX_RETRIES} ]]; then
+            local wait_loops=$(( CARLA_WAIT_TIMEOUT / 5 ))
+            local carla_back=false
+            echo "[gpu${i}] Waiting for CARLA on port ${PORT} (up to ${CARLA_WAIT_TIMEOUT}s)..." | tee -a "${LOG_FILE}"
+            for (( w=0; w<wait_loops; w++ )); do
+                if timeout 2 bash -c "echo > /dev/tcp/localhost/${PORT}" 2>/dev/null; then
+                    carla_back=true
+                    break
+                fi
+                sleep 5
+            done
+            if [[ "${carla_back}" = true ]]; then
+                echo "[gpu${i}] CARLA on port ${PORT} is back. Resuming in ${RETRY_WAIT}s..." | tee -a "${LOG_FILE}"
+            else
+                echo "[gpu${i}] CARLA on port ${PORT} not reachable after ${CARLA_WAIT_TIMEOUT}s. Retrying anyway..." | tee -a "${LOG_FILE}"
+            fi
+            sleep "${RETRY_WAIT}"
+        fi
+    done
+
+    echo "[gpu${i}] Max retries (${MAX_RETRIES}) reached. GPU ${GPU_RANK} gave up." | tee -a "${LOG_FILE}"
+    set -e
+    return 1
+}
+
+# ── Iterate over GPUs and launch evaluations in parallel ──────────────────────
+mkdir -p "${DATA_SAVE_DIR}/results"
+for (( i=0; i<NUM_GPUS; i++ )); do
+    run_gpu "${i}" &
 done
 
 wait

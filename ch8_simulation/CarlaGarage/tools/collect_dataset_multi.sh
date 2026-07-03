@@ -59,7 +59,8 @@ else
 fi
 mkdir -p \
     "${DATA_SAVE_DIR}/data" \
-    "${DATA_SAVE_DIR}/results"
+    "${DATA_SAVE_DIR}/results" \
+    "${DATA_SAVE_DIR}/logs"
 
 # ── CARLA Port settings (match launch_carla_servers.sh) ──
 CARLA_HOST=${CARLA_HOST:-localhost}
@@ -100,6 +101,85 @@ for ((i=0; i<NUM_GPUS; i++)); do
     start=$((start + chunk_size))
 done
 
+# ── Retry / watchdog parameters ─────────────────────────────────────────────
+MAX_RETRIES=${MAX_RETRIES:-5}  # max restart attempts per route before skipping it
+RETRY_WAIT=${RETRY_WAIT:-30}  # seconds to wait before retrying after a crash
+CARLA_WAIT_TIMEOUT=${CARLA_WAIT_TIMEOUT:-1800}  # seconds to wait for CARLA port to reopen (watchdog restart)
+
+# run_route GPU_RANK PORT TM_PORT ROUTES SAVE_PATH CHECKPOINT TOWN
+# Runs collect_dataset.sh with automatic retry on CARLA crash.
+# Output goes to the caller's stdout (redirected to log file by the outer subshell).
+# A route that fails all retries is logged and SKIPPED (return 0) so the GPU
+# continues with remaining routes.
+#
+# CARLA recovery:
+#   After each failure the script waits up to CARLA_WAIT_TIMEOUT seconds for
+#   the watchdog (launch_carla_servers.sh) to restart CARLA on PORT, then retries.
+#
+# always_resume:
+#   After the first failure, resume=1 is passed so leaderboard_evaluator does
+#   NOT call clear_records(), preserving any partial checkpoint data.
+run_route() {
+    local gpu_rank="$1"
+    local port="$2"
+    local tm_port="$3"
+    local routes="$4"
+    local save_path="$5"
+    local checkpoint="$6"
+    local town="$7"
+    local team_config="${routes}"  # PDM-Lite uses the route XML file as its config
+    local route_label
+    route_label=$(basename "${routes}" .xml)
+    local always_resume=${RESUME}
+
+    set +e
+    for (( attempt=1; attempt<=MAX_RETRIES; attempt++ )); do
+        echo "[GPU ${gpu_rank}/${route_label}] Attempt ${attempt}/${MAX_RETRIES}"
+
+        CUDA_VISIBLE_DEVICES="${gpu_rank}" \
+        bash -e "${CARLA_GARAGE_ROOT}/../tools/collect_dataset.sh" \
+            "${CARLA_HOST}" "${port}" "${tm_port}" "${routes}" \
+            "${TEAM_AGENT}" "${team_config}" "${checkpoint}" "${save_path}" \
+            "${always_resume}" "${town}"
+
+        local exit_code=$?
+
+        if [[ ${exit_code} -eq 0 ]]; then
+            echo "[GPU ${gpu_rank}/${route_label}] Completed."
+            set -e
+            return 0
+        fi
+
+        echo "[GPU ${gpu_rank}/${route_label}] Failed (exit=${exit_code}, attempt ${attempt}/${MAX_RETRIES})."
+
+        # After first failure, pass resume=1 to avoid clear_records() wiping the checkpoint.
+        always_resume=1
+
+        if [[ ${attempt} -lt ${MAX_RETRIES} ]]; then
+            local wait_loops=$(( CARLA_WAIT_TIMEOUT / 5 ))
+            local carla_back=false
+            echo "[GPU ${gpu_rank}] Waiting for CARLA on port ${port} (up to ${CARLA_WAIT_TIMEOUT}s)..."
+            for (( w=0; w<wait_loops; w++ )); do
+                if timeout 2 bash -c "echo > /dev/tcp/localhost/${port}" 2>/dev/null; then
+                    carla_back=true
+                    break
+                fi
+                sleep 5
+            done
+            if [[ "${carla_back}" = true ]]; then
+                echo "[GPU ${gpu_rank}] CARLA on port ${port} is back. Retrying in ${RETRY_WAIT}s..."
+            else
+                echo "[GPU ${gpu_rank}] CARLA on port ${port} not reachable after ${CARLA_WAIT_TIMEOUT}s. Retrying anyway..."
+            fi
+            sleep "${RETRY_WAIT}"
+        fi
+    done
+
+    echo "[GPU ${gpu_rank}/${route_label}] All ${MAX_RETRIES} retries failed. Skipping route."
+    set -e
+    return 0  # Return 0 so the GPU continues with remaining routes.
+}
+
 # Iterate over GPUs and launch evaluations in parallel
 for (( i=0; i<NUM_GPUS; i++ )); do
     PORT=$((BASE_PORT + i * PORT_STEP))
@@ -113,10 +193,9 @@ for (( i=0; i<NUM_GPUS; i++ )); do
         echo "[GPU ${GPU_RANK}] No assigned routes. Skipping."
         continue
     fi
-    
-    (
-        echo "[GPU ${GPU_RANK}] Processing files index range: ${start_idx} .. $((end_idx - 1))"
 
+    echo "[GPU ${GPU_RANK}] Processing files index range: ${start_idx} .. $((end_idx - 1))"
+    (
         # Iterate over route XML files for each GPU based on the splitting
         for (( j=start_idx; j<end_idx; j++ )); do
             # Get variables for each route XML file
@@ -135,12 +214,11 @@ for (( i=0; i<NUM_GPUS; i++ )); do
 
             TEAM_CONFIG=${ROUTES}  # Set TEAM_CONFIG to the current route XML file for PDM-Lite agent (PDM-Lite uses the route XML file as its config)
 
-            # Run collect_dataset.sh sequentially (no &): one CARLA server per GPU can only handle one route at a time
-            CUDA_VISIBLE_DEVICES="${GPU_RANK}" \
-            bash -e ${CARLA_GARAGE_ROOT}/../tools/collect_dataset.sh $CARLA_HOST $PORT $TM_PORT $ROUTES $TEAM_AGENT $TEAM_CONFIG $CHECKPOINT_ENDPOINT $SAVE_PATH $RESUME $TOWN
+            # Run collect_dataset.sh with retry/watchdog logic (sequential; one CARLA server per GPU)
+            run_route "${GPU_RANK}" "${PORT}" "${TM_PORT}" "${ROUTES}" "${SAVE_PATH}" "${CHECKPOINT_ENDPOINT}" "${TOWN}"
 
         done
-    ) &
+    ) >> "${DATA_SAVE_DIR}/logs/log_gpu${i}.log" 2>&1 &
 done
 
 wait

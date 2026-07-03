@@ -109,50 +109,185 @@ mkdir -p "${DATA_SAVE_DIR}/split_routes"
 cp "${ROUTES_FILE}" "${SPLIT_BASE}.xml"
 python3 "${CARLA_GARAGE_ROOT}/../tools/split_route_xml.py" "${SPLIT_BASE}" "${NUM_GPUS}"
 
-# Iterate over GPUs and launch evaluations in parallel
+# ── Retry / stuck-route parameters ───────────────────────────────────────────
+MAX_RETRIES=${MAX_RETRIES:-10}  # max evaluator restart attempts per GPU before giving up
+RETRY_WAIT=${RETRY_WAIT:-30}  # seconds to wait before retrying after a crash
+CARLA_WAIT_TIMEOUT=${CARLA_WAIT_TIMEOUT:-1800}  # seconds to wait for CARLA to come back (watchdog restart)
+MAX_STUCK=${MAX_STUCK:-3}  # consecutive same-progress failures before force-skipping
+MAX_TOTAL_SKIPS=${MAX_TOTAL_SKIPS:-10}  # per-GPU cap on total force-skips (prevents infinite loops)
+
+# skip_route.py: force-inserts a "Failed - Simulation crashed" record for the stuck route and advances progress[0] so evaluation can resume.
+SKIP_ROUTE_PY="${CARLA_GARAGE_ROOT}/../tools/b2d_ext/skip_route.py"
+
+# Convert RESUME flag (0/1) to the evaluator's --resume argument.
+RESUME_ARG=""
+if [[ "${RESUME}" -eq 1 ]]; then
+    RESUME_ARG="--resume=True"
+fi
+
+# ── Per-GPU evaluation function ───────────────────────────────────────────────
+# Runs the leaderboard evaluator with automatic retry on CARLA crash.
+#
+# Stuck-route detection:
+#   After each non-zero exit, _checkpoint.progress[0] is read from the JSON
+#   checkpoint and compared to the previous value.  If the same index appears
+#   MAX_STUCK times in a row (meaning CARLA crashed before Python could advance
+#   progress, e.g. C++ abort from spawn_parked_vehicles), skip_route.py is
+#   called to force-insert a "Failed - Simulation crashed" record and advance
+#   progress[0] by 1.  The retry counter is reset so the next route gets a
+#   full set of MAX_RETRIES attempts.  MAX_TOTAL_SKIPS caps total skips per GPU.
+#
+# CARLA recovery:
+#   After a crash, the script waits up to CARLA_WAIT_TIMEOUT seconds for the
+#   watchdog (launch_carla_servers.sh) to restart CARLA on this GPU's port,
+#   then retries evaluation.
+run_gpu() {
+    local i="$1"
+    local PORT=$((BASE_PORT + i * PORT_STEP))
+    local TM_PORT=$((BASE_TM_PORT + i * PORT_STEP))
+    local GPU_RANK=${GPU_ARRAY[$i]}
+    local ROUTES="${SPLIT_BASE}_${i}.xml"
+    local CHECKPOINT_ENDPOINT="${DATA_SAVE_DIR}/results/result_gpu${i}.json"
+    local LOG_FILE="${DATA_SAVE_DIR}/logs/log_gpu${i}.log"
+
+    local stuck_count=0
+    local last_failed_progress=-1
+    local total_skips=0
+    # After the first failure, all subsequent attempts must pass --resume=True
+    # to prevent leaderboard_evaluator.run() from calling clear_records() and
+    # wiping the checkpoint that was accumulated in previous attempts.
+    local always_resume=0
+
+    set +e
+    for (( attempt=1; attempt<=MAX_RETRIES; attempt++ )); do
+        echo "[gpu${i}] Attempt ${attempt}/${MAX_RETRIES} — GPU ${GPU_RANK} port ${PORT}" | tee -a "${LOG_FILE}"
+
+        # Determine resume flag:
+        #   always_resume=1 means a previous attempt already wrote to the checkpoint;
+        #   passing --resume=True prevents leaderboard_evaluator from calling
+        #   clear_records() which would wipe all accumulated results from disk.
+        local actual_resume_arg="${RESUME_ARG}"
+        if [[ ${always_resume} -eq 1 ]]; then
+            actual_resume_arg="--resume=True"
+        fi
+
+        # - WORK_DIR: required by get_weather_id() to locate leaderboard/data/weather.xml
+        # - IS_BENCH2DRIVE: autopilot.py uses path_to_conf_file for save_name
+        # - ROUTES env var: read by autopilot.py for the save path stem
+        # - SAVE_PATH intentionally NOT set (evaluation mode, no sensor data writing)
+        WORK_DIR=${CARLA_GARAGE_ROOT}/Bench2Drive \
+        IS_BENCH2DRIVE=True \
+        ROUTES="${ROUTES}" \
+        CUDA_VISIBLE_DEVICES="${GPU_RANK}" \
+        python "${CARLA_GARAGE_ROOT}/../tools/b2d_ext/leaderboard_evaluator_ext.py" \
+            --host="${CARLA_HOST}" \
+            --port="${PORT}" \
+            --traffic-manager-port="${TM_PORT}" \
+            --routes="${ROUTES}" \
+            --repetitions=1 \
+            --track="${CHALLENGE_TRACK_CODENAME}" \
+            --checkpoint="${CHECKPOINT_ENDPOINT}" \
+            --agent="${TEAM_AGENT}" \
+            --agent-config="${TEAM_CONFIG}" \
+            --debug=0 \
+            --record="${RECORD_PATH}" \
+            --gpu-rank="${GPU_RANK}" \
+            ${actual_resume_arg} \
+            >> "${LOG_FILE}" 2>&1
+
+        local exit_code=$?
+
+        if [[ ${exit_code} -eq 0 ]]; then
+            echo "[gpu${i}] All routes completed successfully." | tee -a "${LOG_FILE}"
+            set -e
+            return 0
+        fi
+
+        echo "[gpu${i}] Evaluator exited with code ${exit_code} (attempt ${attempt}/${MAX_RETRIES})." | tee -a "${LOG_FILE}"
+
+        # From this point onwards, the checkpoint file on disk has been touched
+        # (even if the evaluator crashed early).  All subsequent retries must
+        # pass --resume=True so leaderboard_evaluator does NOT call clear_records().
+        always_resume=1
+
+        # ── Stuck-route detection ─────────────────────────────────────────
+        # Read _checkpoint.progress[0] from the JSON checkpoint file.
+        # If the value matches the previous failure, CARLA crashed before
+        # Python could advance the checkpoint (e.g. C++ abort in UE4).
+        # After MAX_STUCK consecutive identical values, force-skip the route.
+        # ─────────────────────────────────────────────────────────────────
+        local current_progress
+        current_progress=$(python3 -c "
+import json, sys
+try:
+    with open('${CHECKPOINT_ENDPOINT}') as f:
+        d = json.load(f)
+    print(d['_checkpoint']['progress'][0])
+except Exception:
+    print(-1)
+" 2>/dev/null || echo -1)
+
+        if [[ "${current_progress}" != "-1" ]]; then
+            if [[ "${current_progress}" = "${last_failed_progress}" ]]; then
+                stuck_count=$((stuck_count + 1))
+            else
+                stuck_count=1
+                last_failed_progress="${current_progress}"
+            fi
+            echo "[gpu${i}] Same-route failure count=${stuck_count}/${MAX_STUCK} (progress=${current_progress})." | tee -a "${LOG_FILE}"
+
+            if [[ ${stuck_count} -ge ${MAX_STUCK} ]]; then
+                if [[ ${total_skips} -ge ${MAX_TOTAL_SKIPS} ]]; then
+                    echo "[gpu${i}] ERROR: MAX_TOTAL_SKIPS=${MAX_TOTAL_SKIPS} reached. Aborting GPU ${GPU_RANK}." | tee -a "${LOG_FILE}"
+                    set -e
+                    return 1
+                fi
+                echo "[gpu${i}] Force-skipping stuck route at progress=${current_progress}..." | tee -a "${LOG_FILE}"
+                if python3 "${SKIP_ROUTE_PY}" "${CHECKPOINT_ENDPOINT}" "${ROUTES}" >> "${LOG_FILE}" 2>&1; then
+                    stuck_count=0
+                    last_failed_progress="-1"
+                    total_skips=$((total_skips + 1))
+                    attempt=0  # for-loop increments to 1: gives next route full MAX_RETRIES
+                    echo "[gpu${i}] Skip ${total_skips}/${MAX_TOTAL_SKIPS} done. Continuing..." | tee -a "${LOG_FILE}"
+                    continue
+                else
+                    echo "[gpu${i}] skip_route.py failed — falling back to normal retry." | tee -a "${LOG_FILE}"
+                fi
+            fi
+        fi
+
+        # ── Waiting for CARLA to restart ─────────────────────────────────────────
+        # Watchdog monitors the TCP port until the crashed CARLA instance is restarted.
+        # ─────────────────────────────────────────────────────────────────
+        if [[ ${attempt} -lt ${MAX_RETRIES} ]]; then
+            local wait_loops=$(( CARLA_WAIT_TIMEOUT / 5 ))
+            local carla_back=false
+            echo "[gpu${i}] Waiting for CARLA on port ${PORT} (up to ${CARLA_WAIT_TIMEOUT}s)..." | tee -a "${LOG_FILE}"
+            for (( w=0; w<wait_loops; w++ )); do
+                if timeout 2 bash -c "echo > /dev/tcp/localhost/${PORT}" 2>/dev/null; then
+                    carla_back=true
+                    break
+                fi
+                sleep 5
+            done
+            if [[ "${carla_back}" = true ]]; then
+                echo "[gpu${i}] CARLA on port ${PORT} is back. Resuming in ${RETRY_WAIT}s..." | tee -a "${LOG_FILE}"
+            else
+                echo "[gpu${i}] CARLA on port ${PORT} not reachable after ${CARLA_WAIT_TIMEOUT}s. Retrying anyway..." | tee -a "${LOG_FILE}"
+            fi
+            sleep "${RETRY_WAIT}"
+        fi
+    done
+
+    echo "[gpu${i}] Max retries (${MAX_RETRIES}) reached. GPU ${GPU_RANK} gave up." | tee -a "${LOG_FILE}"
+    set -e
+    return 1
+}
+
+# ── Iterate over GPUs and launch evaluations in parallel ──────────────────────
+mkdir -p "${DATA_SAVE_DIR}/results" "${DATA_SAVE_DIR}/data"
 for (( i=0; i<NUM_GPUS; i++ )); do
-    PORT=$((BASE_PORT + i * PORT_STEP))
-    TM_PORT=$((BASE_TM_PORT + i * PORT_STEP))
-    GPU_RANK=${GPU_ARRAY[$i]}
-    
-    # Get variables for each GPU
-    ROUTES="${SPLIT_BASE}_${i}.xml"  # Use split route XML file for each GPU
-    SAVE_PATH=${DATA_SAVE_DIR}/data
-    CHECKPOINT_ENDPOINT=${DATA_SAVE_DIR}/results/result_gpu${i}.json
-    mkdir -p "$SAVE_PATH" "$(dirname "$CHECKPOINT_ENDPOINT")"
-
-    # Convert RESUME flag (0/1) to the evaluator's --resume argument (type=bool: empty => False).
-    RESUME_ARG=""
-    if [ "${RESUME}" -eq 1 ]; then
-        RESUME_ARG="--resume=True"
-    fi
-
-    # Run the Bench2Drive evaluator against the EXTERNAL CARLA server (no self-launch).
-    # - GPU is selected via CUDA_VISIBLE_DEVICES; the server instance is selected via --host/--port.
-    # - WORK_DIR is required by the B2D evaluator's get_weather_id() to locate leaderboard/data/weather.xml.
-    # - IS_BENCH2DRIVE must be "True" so autopilot.py uses path_to_conf_file for save_name (not undefined 'now').
-    # - ROUTES env var is read by autopilot.py for the save path stem (only used when SAVE_PATH is also set).
-    # - SAVE_PATH is intentionally NOT set here (evaluation mode does not write sensor data).
-    WORK_DIR=${CARLA_GARAGE_ROOT}/Bench2Drive \
-    IS_BENCH2DRIVE=True \
-    ROUTES="${ROUTES}" \
-    CUDA_VISIBLE_DEVICES="${GPU_RANK}" \
-    python "${CARLA_GARAGE_ROOT}/../tools/b2d_ext/leaderboard_evaluator_ext.py" \
-        --host="${CARLA_HOST}" \
-        --port="${PORT}" \
-        --traffic-manager-port="${TM_PORT}" \
-        --routes="${ROUTES}" \
-        --repetitions=1 \
-        --track="${CHALLENGE_TRACK_CODENAME}" \
-        --checkpoint="${CHECKPOINT_ENDPOINT}" \
-        --agent="${TEAM_AGENT}" \
-        --agent-config="${TEAM_CONFIG}" \
-        --debug=0 \
-        --record="${RECORD_PATH}" \
-        --gpu-rank="${GPU_RANK}" \
-        ${RESUME_ARG} \
-        > "${DATA_SAVE_DIR}/logs/log_gpu${i}.log" 2>&1 &
-    sleep 5
+    run_gpu "${i}" &
 done
 
 wait

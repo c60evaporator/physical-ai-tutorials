@@ -7,6 +7,9 @@ ch8_simulation/Bench2Drive/data
 
 ch8_simulation/CarlaGarage/data/*
 !/ch8_simulation/CarlaGarage/data/.gitkeep
+ch8_simulation/CarlaGarage/data/.venv
+ch8_simulation/CarlaGarage/tools/logs
+ch8_simulation/CarlaGarage/tools/carla_launch/.pids
 
 .env
 __pycache__

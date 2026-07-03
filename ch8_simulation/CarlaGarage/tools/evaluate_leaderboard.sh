@@ -42,7 +42,7 @@ export UNCERTAINTY_WEIGHT=1
 export STOP_AFTER_METER=-1
 
 cd "${CARLA_GARAGE_ROOT}" # Move to ${CARLA_GARAGE_ROOT} to ensure relative paths for leaderboard_evaluator_local.py
-python ${LEADERBOARD_ROOT}/leaderboard/leaderboard_evaluator_local.py \
+python ${CARLA_GARAGE_ROOT}/../tools/b2d_ext/leaderboard_evaluator_local_ext.py \
 --host=${HOST} \
 --port=${PORT} \
 --traffic-manager-port=${TM_PORT} \
