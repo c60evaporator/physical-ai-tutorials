@@ -42,7 +42,8 @@ import leaderboard.leaderboard_evaluator_local as _orig_module
 
 
 class _PatchedLeaderboardEvaluator(LeaderboardEvaluator):
-    """Drop-in replacement that fixes the find_free_port TOCTOU race."""
+    """Drop-in replacement that fixes the find_free_port TOCTOU race and
+    re-applies the synchronous world settings after every world load."""
 
     def _setup_simulation(self, args):
         """Override: start find_free_port scan at args.traffic_manager_port.
@@ -78,6 +79,57 @@ class _PatchedLeaderboardEvaluator(LeaderboardEvaluator):
         traffic_manager.set_hybrid_physics_mode(True)
 
         return client, client_timeout, traffic_manager, traffic_manager_port
+
+    def _load_and_wait_for_world(self, args, town):
+        """Override: re-apply the synchronous world settings after load_world.
+
+        The original only applies synchronous_mode / fixed_delta_seconds once in
+        ``_setup_simulation``, but CARLA (sometimes) resets world settings when
+        loading a Large Map (Town12/13) even with ``reset_settings=False`` — the
+        original itself re-applies the tile streaming distances for this reason.
+        When the synchronous settings are lost, sensor setup later crashes with
+        ``TypeError: 1 / fixed_delta_seconds`` (None) in agent_wrapper_local.py.
+        Re-applying the full settings after every world load (as the official
+        leaderboard does) makes this deterministic. The rest of the body is
+        copied unchanged from leaderboard_evaluator_local.py.
+        """
+        import random  # noqa: PLC0415 — imported here to mirror original structure
+        import numpy as np  # noqa: PLC0415
+        import torch  # noqa: PLC0415
+        from srunner.scenariomanager.carla_data_provider import CarlaDataProvider  # noqa: PLC0415
+
+        self.world = self.client.load_world(town, reset_settings=False)
+
+        # Large Map loads can reset the world settings; re-apply all of them,
+        # not just the tile streaming distances.
+        settings = self.world.get_settings()
+        settings.synchronous_mode = True
+        settings.fixed_delta_seconds = 1.0 / self.frame_rate
+        settings.deterministic_ragdolls = True
+        settings.spectator_as_ego = False
+        settings.tile_stream_distance = 650
+        settings.actor_active_distance = 650
+        self.world.apply_settings(settings)
+
+        self.world.reset_all_traffic_lights()
+        CarlaDataProvider.set_client(self.client)
+        CarlaDataProvider.set_traffic_manager_port(self.traffic_manager_port)
+        CarlaDataProvider.set_world(self.world)
+        CarlaDataProvider.set_random_seed(args.traffic_manager_seed)
+
+        # This must be here so that all route repetitions use the same 'unmodified' seed
+        self.traffic_manager.set_random_device_seed(args.traffic_manager_seed)
+        np.random.seed(args.traffic_manager_seed)
+        random.seed(args.traffic_manager_seed)
+        torch.manual_seed(args.traffic_manager_seed)
+
+        # Wait for the world to be ready
+        self.world.tick()
+
+        map_name = CarlaDataProvider.get_map().name.split("/")[-1]
+        if map_name != town:
+            raise Exception("The CARLA server uses the wrong map!"
+                            " This scenario requires the use of map {}".format(town))
 
 
 def main():

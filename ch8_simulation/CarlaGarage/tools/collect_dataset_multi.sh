@@ -34,7 +34,7 @@ if [ "$AGENT_NAME" = "pdmlite" ]; then
     TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/team_code/data_agent.py}  # PDM-Lite data collection agent
     CHALLENGE_TRACK_CODENAME=MAP
 elif [ "$AGENT_NAME" = "pdmlite_nuscenes" ]; then
-    TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/team_code/data_agent_nuscenes.py}  # PDM-Lite data collection agent with nuScenes camera rig
+    TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/team_code/data_agents/data_agent_nuscenes.py}  # PDM-Lite data collection agent with nuScenes camera rig
     CHALLENGE_TRACK_CODENAME=MAP_QUALIFIER
 else
     TEAM_AGENT=${TEAM_AGENT:?Please set TEAM_AGENT environment variable for agent '${AGENT_NAME}'.}
