@@ -206,6 +206,23 @@ run_gpu() {
         local exit_code=$?
 
         if [[ ${exit_code} -eq 0 ]]; then
+            # Agent setup/runtime failures do not affect the exit code and their
+            # routes stay recorded as 'Failed - Agent ...' with score 0 (progress
+            # has already advanced, so a retry would not re-run them). Surface
+            # them so a silently degraded evaluation is not mistaken for a clean one.
+            local agent_failures
+            agent_failures=$(python3 -c "
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        records = json.load(f)['_checkpoint']['records']
+    print(sum(1 for r in records if str(r.get('status', '')).startswith('Failed - Agent')))
+except Exception:
+    print(0)
+" "${CHECKPOINT_ENDPOINT}" 2>/dev/null || echo 0)
+            if [[ "${agent_failures}" != "0" ]]; then
+                echo "[gpu${i}] WARNING: ${agent_failures} route(s) recorded as 'Failed - Agent ...' (score 0) in ${CHECKPOINT_ENDPOINT}. Check the log for agent errors." | tee -a "${LOG_FILE}"
+            fi
             echo "[gpu${i}] All routes completed successfully." | tee -a "${LOG_FILE}"
             set -e
             return 0

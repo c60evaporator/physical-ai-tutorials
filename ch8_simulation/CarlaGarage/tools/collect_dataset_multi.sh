@@ -134,6 +134,15 @@ source "${TOOLS_DIR}/carla_launch/_restart_request.sh"
 # always_resume:
 #   After the first failure, resume=1 is passed so leaderboard_evaluator does
 #   NOT call clear_records(), preserving any partial checkpoint data.
+#
+# Agent-failure detection (exit code 0):
+#   The evaluator only exits non-zero for 'Simulation crashed'; agent setup
+#   failures and agent runtime crashes are recorded as
+#   'Failed - Agent couldn't be set up' / 'Failed - Agent crashed' in the
+#   checkpoint and exit 0. Those are detected from the checkpoint records and
+#   retried too. Because such failures still advance the checkpoint progress
+#   (a resumed retry would no-op), the checkpoint is deleted and the retry
+#   runs fresh (resume=0).
 run_route() {
     local gpu_rank="$1"
     local port="$2"
@@ -161,15 +170,41 @@ run_route() {
         local exit_code=$?
 
         if [[ ${exit_code} -eq 0 ]]; then
-            echo "[GPU ${gpu_rank}/${route_label}] Completed."
-            set -e
-            return 0
+            # The evaluator exits 0 even when the agent failed to set up or
+            # crashed mid-route: only 'Simulation crashed' exits non-zero (see
+            # FAILURE_MESSAGES and leaderboard_evaluator_local.py). Inspect the
+            # checkpoint so agent failures are retried instead of being
+            # silently recorded as complete.
+            local agent_failure
+            agent_failure=$(python3 -c "
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        records = json.load(f)['_checkpoint']['records']
+    print(next((r['status'] for r in records if str(r.get('status', '')).startswith('Failed - Agent')), ''))
+except Exception:
+    print('')
+" "${checkpoint}" 2>/dev/null || echo '')
+
+            if [[ -z "${agent_failure}" ]]; then
+                echo "[GPU ${gpu_rank}/${route_label}] Completed."
+                set -e
+                return 0
+            fi
+
+            echo "[GPU ${gpu_rank}/${route_label}] Evaluator exited 0 but the checkpoint says \"${agent_failure}\"" \
+                 "(attempt ${attempt}/${MAX_RETRIES}). Treating as a failure."
+            # The failure advanced the checkpoint's progress, so a resumed retry
+            # would consider the route done and no-op. Delete the checkpoint
+            # (it only holds the worthless failed record) and start fresh.
+            rm -f "${checkpoint}"
+            always_resume=0
+        else
+            echo "[GPU ${gpu_rank}/${route_label}] Failed (exit=${exit_code}, attempt ${attempt}/${MAX_RETRIES})."
+
+            # After first failure, pass resume=1 to avoid clear_records() wiping the checkpoint.
+            always_resume=1
         fi
-
-        echo "[GPU ${gpu_rank}/${route_label}] Failed (exit=${exit_code}, attempt ${attempt}/${MAX_RETRIES})."
-
-        # After first failure, pass resume=1 to avoid clear_records() wiping the checkpoint.
-        always_resume=1
 
         if [[ ${attempt} -lt ${MAX_RETRIES} ]]; then
             local wait_loops=$(( CARLA_WAIT_TIMEOUT / 5 ))
