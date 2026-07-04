@@ -3,7 +3,7 @@
 This module applies NumPy >= 1.24 compatibility fixes specific to the PDM-Lite
 agent (``autopilot.py`` and the ``KinematicBicycleModel`` it relies on).
 
-Usage pattern (inside ``leaderboard_evaluator_ext.py``)::
+Usage pattern (inside ``leaderboard_evaluator_b2d_ext.py``)::
 
     # At module level — runs the NumPy shim before any team_code import:
     from pdm_lite_patches import apply_pdm_lite_patches

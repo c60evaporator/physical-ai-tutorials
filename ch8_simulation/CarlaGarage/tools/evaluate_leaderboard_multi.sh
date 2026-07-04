@@ -152,7 +152,7 @@ run_gpu() {
         local actual_resume=${always_resume}
 
         CUDA_VISIBLE_DEVICES="${GPU_RANK}" \
-        bash -e "${CARLA_GARAGE_ROOT}/../tools/evaluate_leaderboard.sh" \
+        bash -e "${CARLA_GARAGE_ROOT}/../tools/leaderboard_local/evaluate_leaderboard.sh" \
             "${CARLA_HOST}" "${PORT}" "${TM_PORT}" "${ROUTES}" \
             "${TEAM_AGENT}" "${TEAM_CONFIG}" "${CHECKPOINT_ENDPOINT}" "${SAVE_PATH}" \
             "${actual_resume}" "${CHALLENGE_TRACK_CODENAME}" "${LEADERBOARD_ROOT}" "${SCENARIO_RUNNER_ROOT}" \

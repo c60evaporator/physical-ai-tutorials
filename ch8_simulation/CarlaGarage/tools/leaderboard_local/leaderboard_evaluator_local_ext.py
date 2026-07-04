@@ -22,9 +22,9 @@ searches a non-overlapping range (e.g. GPU0 starts at 8000, GPU1 at 8150, …).
 ``collect_dataset.sh`` already passes ``--traffic-manager-port=BASE+i*STEP``,
 so no shell-side changes are needed beyond pointing at this entry point.
 
-Usage (set in collect_dataset.sh)
-----------------------------------
-    python tools/b2d_ext/leaderboard_evaluator_local_ext.py \\
+Usage (set in leaderboard_local/collect_dataset.sh and leaderboard_local/evaluate_leaderboard.sh)
+--------------------------------------------------------------------------------------------------
+    python tools/leaderboard_local/leaderboard_evaluator_local_ext.py \\
         --traffic-manager-port=<BASE+i*STEP> \\
         <other args>
 """

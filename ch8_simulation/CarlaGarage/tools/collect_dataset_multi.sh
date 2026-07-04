@@ -162,7 +162,7 @@ run_route() {
         echo "[GPU ${gpu_rank}/${route_label}] Attempt ${attempt}/${MAX_RETRIES}"
 
         CUDA_VISIBLE_DEVICES="${gpu_rank}" \
-        bash -e "${CARLA_GARAGE_ROOT}/../tools/collect_dataset.sh" \
+        bash -e "${CARLA_GARAGE_ROOT}/../tools/leaderboard_local/collect_dataset.sh" \
             "${CARLA_HOST}" "${port}" "${tm_port}" "${routes}" \
             "${TEAM_AGENT}" "${team_config}" "${checkpoint}" "${save_path}" \
             "${always_resume}" "${track}" "${town}"

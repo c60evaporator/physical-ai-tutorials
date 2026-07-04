@@ -117,7 +117,7 @@ MAX_STUCK=${MAX_STUCK:-3}  # consecutive same-progress failures before force-ski
 MAX_TOTAL_SKIPS=${MAX_TOTAL_SKIPS:-10}  # per-GPU cap on total force-skips (prevents infinite loops)
 
 # skip_route.py: force-inserts a "Failed - Simulation crashed" record for the stuck route and advances progress[0] so evaluation can resume.
-SKIP_ROUTE_PY="${CARLA_GARAGE_ROOT}/../tools/b2d_ext/skip_route.py"
+SKIP_ROUTE_PY="${CARLA_GARAGE_ROOT}/../tools/common/skip_route.py"
 
 # request_carla_restart(): asks the host-side watchdog for a fresh CARLA
 # instance via a sentinel file in tools/carla_launch/ (shared ./tools mount).
@@ -187,7 +187,7 @@ run_gpu() {
         IS_BENCH2DRIVE=True \
         ROUTES="${ROUTES}" \
         CUDA_VISIBLE_DEVICES="${GPU_RANK}" \
-        python "${CARLA_GARAGE_ROOT}/../tools/b2d_ext/leaderboard_evaluator_ext.py" \
+        python "${CARLA_GARAGE_ROOT}/../tools/b2d/leaderboard_evaluator_b2d_ext.py" \
             --host="${CARLA_HOST}" \
             --port="${PORT}" \
             --traffic-manager-port="${TM_PORT}" \
