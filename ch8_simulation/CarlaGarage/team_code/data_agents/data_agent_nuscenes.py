@@ -23,8 +23,7 @@ def get_entry_point():
 
 class DataAgentNuScenes(GeneralizedDataAgent):
     """
-    Child of the autopilot that additionally collects data with a nuScenes-style
-    6 camera + LiDAR rig, stored in nuScenes conventions.
+    Child of GeneralizedDataAgent with a nuScenes-style 6 camera + LiDAR rig.
     """
 
     COORDINATE_SYSTEM = 'nuscenes'

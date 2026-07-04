@@ -105,6 +105,11 @@ RETRY_WAIT=${RETRY_WAIT:-30}  # seconds to wait before retrying after a crash
 CARLA_WAIT_TIMEOUT=${CARLA_WAIT_TIMEOUT:-1800}  # seconds to wait for CARLA port to reopen (watchdog restart)
 MAX_STUCK=${MAX_STUCK:-3}  # consecutive same-progress failures before logging a warning (force-skip is not applied here — stuck counter is reset instead)
 
+# request_carla_restart(): asks the host-side watchdog for a fresh CARLA
+# instance via a sentinel file in tools/carla_launch/ (shared ./tools mount).
+TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${TOOLS_DIR}/carla_launch/_restart_request.sh"
+
 # ── Per-GPU evaluation function ───────────────────────────────────────────────
 # Runs evaluate_leaderboard.sh with automatic retry on CARLA crash.
 #
@@ -117,8 +122,12 @@ MAX_STUCK=${MAX_STUCK:-3}  # consecutive same-progress failures before logging a
 #   here because skip_route.py targets B2D checkpoint format.
 #
 # CARLA recovery:
-#   After a crash, the script waits up to CARLA_WAIT_TIMEOUT seconds for the
-#   watchdog (launch_carla_servers.sh) to restart CARLA on this GPU's port.
+#   After a crash, the script requests a fresh CARLA instance via
+#   request_carla_restart() (see carla_launch/_restart_request.sh): a crashed
+#   evaluator can leave actors/TM inside a still-running server, silently
+#   distorting the scores of the remaining routes. It then waits up to
+#   CARLA_WAIT_TIMEOUT seconds for the port before retrying; without a running
+#   host-side watchdog it falls back to reusing the existing instance.
 run_gpu() {
     local i="$1"
     local PORT=$((BASE_PORT + i * PORT_STEP))
@@ -193,10 +202,13 @@ except Exception:
             fi
         fi
 
-        # ── Waiting for CARLA to restart ─────────────────────────────────────────
-        # Watchdog monitors the TCP port until the crashed CARLA instance is restarted.
+        # ── CARLA restart before retrying ────────────────────────────────────────
+        # Request a fresh instance from the host-side watchdog, then wait for
+        # the port to accept connections.
         # ─────────────────────────────────────────────────────────────────
         if [[ ${attempt} -lt ${MAX_RETRIES} ]]; then
+            request_carla_restart "${PORT}" "[gpu${i}]" 2>&1 | tee -a "${LOG_FILE}"
+
             local wait_loops=$(( CARLA_WAIT_TIMEOUT / 5 ))
             local carla_back=false
             echo "[gpu${i}] Waiting for CARLA on port ${PORT} (up to ${CARLA_WAIT_TIMEOUT}s)..." | tee -a "${LOG_FILE}"

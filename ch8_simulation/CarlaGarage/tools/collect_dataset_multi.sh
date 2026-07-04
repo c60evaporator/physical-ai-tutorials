@@ -28,7 +28,7 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"  # Restore positional parameters so
 
 ROUTES_DIR="${1:?Please specify the routes directory. Usage: $0 <routes_dir>}" # Directory containing route XML files for dataset collection
 COLLECTION_ROUTES="$(basename "$(realpath "$ROUTES_DIR")")"  # Use folder name of ROUTES_DIR as route definition name
-AGENT_NAME=$2
+AGENT_NAME="${2:-}"
 
 if [ "$AGENT_NAME" = "pdmlite" ]; then
     TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/team_code/data_agent.py}  # PDM-Lite data collection agent
@@ -36,9 +36,12 @@ if [ "$AGENT_NAME" = "pdmlite" ]; then
 elif [ "$AGENT_NAME" = "pdmlite_nuscenes" ]; then
     TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/team_code/data_agents/data_agent_nuscenes.py}  # PDM-Lite data collection agent with nuScenes camera rig
     CHALLENGE_TRACK_CODENAME=MAP_QUALIFIER
+elif [ -z "$AGENT_NAME" ]; then
+    TEAM_AGENT=${TEAM_AGENT:?Please set TEAM_AGENT environment variable when AGENT_NAME is omitted.}
+    CHALLENGE_TRACK_CODENAME=MAP_QUALIFIER
 else
     TEAM_AGENT=${TEAM_AGENT:?Please set TEAM_AGENT environment variable for agent '${AGENT_NAME}'.}
-    CHALLENGE_TRACK_CODENAME=${DATASET_TRACK_CODENAME:-MAP_QUALIFIER}
+    CHALLENGE_TRACK_CODENAME=MAP_QUALIFIER
 fi
 
 # Create DATA_SAVE_DIR based on COLLECTION_ROUTES and timestamp
@@ -110,6 +113,10 @@ done
 MAX_RETRIES=${MAX_RETRIES:-5}  # max restart attempts per route before skipping it
 RETRY_WAIT=${RETRY_WAIT:-30}  # seconds to wait before retrying after a crash
 CARLA_WAIT_TIMEOUT=${CARLA_WAIT_TIMEOUT:-1800}  # seconds to wait for CARLA port to reopen (watchdog restart)
+# request_carla_restart(): asks the host-side watchdog for a fresh CARLA
+# instance via a sentinel file in tools/carla_launch/ (shared ./tools mount).
+TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${TOOLS_DIR}/carla_launch/_restart_request.sh"
 
 # run_route GPU_RANK PORT TM_PORT ROUTES SAVE_PATH CHECKPOINT TRACK TOWN
 # Runs collect_dataset.sh with automatic retry on CARLA crash.
@@ -118,8 +125,11 @@ CARLA_WAIT_TIMEOUT=${CARLA_WAIT_TIMEOUT:-1800}  # seconds to wait for CARLA port
 # continues with remaining routes.
 #
 # CARLA recovery:
-#   After each failure the script waits up to CARLA_WAIT_TIMEOUT seconds for
-#   the watchdog (launch_carla_servers.sh) to restart CARLA on PORT, then retries.
+#   After each failure the script requests a fresh CARLA instance via
+#   request_carla_restart() (see carla_launch/_restart_request.sh for the
+#   sentinel protocol and rationale), then confirms the port is open and
+#   retries. Without a running host-side watchdog it falls back to reusing
+#   the existing instance (previous behaviour).
 #
 # always_resume:
 #   After the first failure, resume=1 is passed so leaderboard_evaluator does
@@ -163,6 +173,12 @@ run_route() {
 
         if [[ ${attempt} -lt ${MAX_RETRIES} ]]; then
             local wait_loops=$(( CARLA_WAIT_TIMEOUT / 5 ))
+
+            # Ask the host-side watchdog for a fresh CARLA instance and wait
+            # for the restart to finish (falls back if no watchdog responds).
+            request_carla_restart "${port}" "[GPU ${gpu_rank}]"
+
+            # Confirm the port accepts connections before retrying.
             local carla_back=false
             echo "[GPU ${gpu_rank}] Waiting for CARLA on port ${port} (up to ${CARLA_WAIT_TIMEOUT}s)..."
             for (( w=0; w<wait_loops; w++ )); do

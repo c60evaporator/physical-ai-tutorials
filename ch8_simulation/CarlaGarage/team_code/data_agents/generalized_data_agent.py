@@ -96,9 +96,7 @@ class GeneralizedDataAgent(DataAgent):
     #   ring_index). intensity is CARLA's raw [0, 1] attenuation value; ring_index is
     #   always 0 because CARLA does not expose it.
     LIDAR_FORMAT = 'laz'
-
     # LAZ compression settings for stored LiDAR point clouds
-    # (mirrors config.point_format / config.point_precision without depending on them)
     LAZ_POINT_FORMAT = 0
     LAZ_POINT_PRECISION = 0.01
 
