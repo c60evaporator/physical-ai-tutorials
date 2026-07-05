@@ -10,7 +10,7 @@ services:
         # Conda settings
         MINIFORGE_VERSION: "${MINIFORGE_VERSION:-24.11.0-1}"
         # Mounting folders
-        CARLA_ROOT: "${CARLA_ROOT:-/workspace/carla}"
+        CARLA_ROOT: "${CARLA_CONTAINER_ROOT:-/workspace/carla}"
         SCENARIO_RUNNER_ROOT: "${SCENARIO_RUNNER_ROOT:-/workspace/scenario_runner}"
         LEADERBOARD_ROOT: "${LEADERBOARD_ROOT:-/workspace/leaderboard}"
         TEAM_CODE_ROOT: "${TEAM_CODE_ROOT:-/workspace/team_code}"
@@ -47,7 +47,7 @@ services:
     # Environment variables (-e option)
     environment:
       # Mounting folders
-      CARLA_ROOT: "${CARLA_ROOT:-/workspace/carla}"
+      CARLA_ROOT: "${CARLA_CONTAINER_ROOT:-/workspace/carla}"
       SCENARIO_RUNNER_ROOT: "${SCENARIO_RUNNER_ROOT:-/workspace/scenario_runner}"
       LEADERBOARD_ROOT: "${LEADERBOARD_ROOT:-/workspace/leaderboard}"
       TEAM_CODE_ROOT: "${TEAM_CODE_ROOT:-/workspace/team_code}"
@@ -55,7 +55,7 @@ services:
     # Volume mounts
     volumes:
       # CARLA PythonAPI on host
-      - "${CARLA_HOST_PATH:-~./carla}:${CARLA_ROOT:-/workspace/carla}"
+      - "${CARLA_HOST_PATH:-~./carla}:${CARLA_CONTAINER_ROOT:-/workspace/carla}"
       # Leaderboard codes
       - ./scenario_runner:${SCENARIO_RUNNER_ROOT:-/workspace/scenario_runner}
       - ./leaderboard:${LEADERBOARD_ROOT:-/workspace/leaderboard}

@@ -14,7 +14,7 @@ services:
         # Conda settings
         MINIFORGE_VERSION: "${MINIFORGE_VERSION:-24.11.0-1}"
         # Mounting folders
-        CARLA_ROOT: "${CARLA_ROOT:-/workspace/carla}"
+        CARLA_ROOT: "${CARLA_CONTAINER_ROOT:-/workspace/carla}"
         CARLA_GARAGE_ROOT: "${CARLA_GARAGE_ROOT:-/workspace/carla_garage}"
         LEADERBOARD_ROOT: "${CARLA_GARAGE_ROOT:-/workspace/carla_garage}/leaderboard"
         TEAM_CODE_ROOT: "${CARLA_GARAGE_ROOT:-/workspace/carla_garage}/team_code"
@@ -52,6 +52,8 @@ services:
     environment:
       # Base path for project data inside the container
       PROJECT_DATA_ROOT: ${PROJECT_DATA_ROOT:-/workspace/data}
+      # CARLA path inside the container
+      CARLA_ROOT: "${CARLA_CONTAINER_ROOT:-/workspace/carla}"
       # GPU list and port settings for multi-GPU evaluation
       # (shared with carla/launch_carla_servers_host.sh)
       EVAL_GPUS: "${EVAL_GPUS:-0}"
@@ -62,7 +64,7 @@ services:
     # Volume mounts
     volumes:
       # CARLA PythonAPI on host
-      - "${CARLA_HOST_PATH:-~./carla}:${CARLA_ROOT:-/workspace/carla}"
+      - "${CARLA_HOST_PATH:-./carla}:${CARLA_CONTAINER_ROOT:-/workspace/carla}"
       # Carla Garage codes
       - ./carla_garage:${CARLA_GARAGE_ROOT:-/workspace/carla_garage}
       # Custom nuScenes-layout data agent (kept outside the upstream clone)
