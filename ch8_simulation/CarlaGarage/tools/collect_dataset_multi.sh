@@ -29,13 +29,16 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"  # Restore positional parameters so
 ROUTES_DIR="${1:?Please specify the routes directory. Usage: $0 <routes_dir>}" # Directory containing route XML files for dataset collection
 COLLECTION_ROUTES="$(basename "$(realpath "$ROUTES_DIR")")"  # Use folder name of ROUTES_DIR as route definition name
 AGENT_NAME="${2:-}"
+OUTPUT_FORMAT_NAME="garage"
 
 if [ "$AGENT_NAME" = "pdmlite" ]; then
     TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/team_code/data_agent.py}  # PDM-Lite data collection agent
     CHALLENGE_TRACK_CODENAME=MAP
+    OUTPUT_FORMAT_NAME="garage"
 elif [ "$AGENT_NAME" = "pdmlite_nuscenes" ]; then
     TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/team_code/data_agents/data_agent_nuscenes.py}  # PDM-Lite data collection agent with nuScenes camera rig
     CHALLENGE_TRACK_CODENAME=MAP_QUALIFIER
+    OUTPUT_FORMAT_NAME="garage_nuscenes"
 elif [ -z "$AGENT_NAME" ]; then
     TEAM_AGENT=${TEAM_AGENT:?Please set TEAM_AGENT environment variable when AGENT_NAME is omitted.}
     CHALLENGE_TRACK_CODENAME=MAP_QUALIFIER
@@ -45,7 +48,7 @@ else
 fi
 
 # Create DATA_SAVE_DIR based on COLLECTION_ROUTES and timestamp
-DATA_SAVE_ROOT=${PROJECT_DATA_ROOT:-/workspace/data}/data_collection/carla_garage
+DATA_SAVE_ROOT=${PROJECT_DATA_ROOT:-/workspace/data}/data_collection/${OUTPUT_FORMAT_NAME}
 # --resume flag implies reusing the latest existing directory
 if [ "${RESUME}" -eq 1 ]; then
     CREATE_NEW=${CREATE_NEW:-0}
