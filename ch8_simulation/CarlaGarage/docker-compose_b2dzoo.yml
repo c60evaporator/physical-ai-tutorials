@@ -1,0 +1,84 @@
+services:
+  carlagarage-b2dzoo:
+    image: "carlagarage-b2dzoo:latest"
+    # docker build options
+    build:
+      context: .
+      dockerfile: Dockerfile_b2dzoo
+      # --build-arg option
+      args:
+        # CUDA and Ubuntu Versions
+        CUDA_VERSION: "${CUDA_VERSION:-12.1.1}"
+        TORCH_CUDA: "${TORCH_CUDA:-cu121}"
+        UBUNTU_VERSION: "${UBUNTU_VERSION:-22.04}"
+        # Conda settings
+        MINIFORGE_VERSION: "${MINIFORGE_VERSION:-24.11.0-1}"
+        # GPU architecture (https://en.wikipedia.org/wiki/CUDA#GPUs_supported)
+        TORCH_CUDA_ARCH_LIST: "${TORCH_CUDA_ARCH_LIST:-8.9}"
+        # Mounting folders
+        CARLA_ROOT: "${CARLA_CONTAINER_ROOT:-/workspace/carla}"
+        CARLA_GARAGE_ROOT: "${CARLA_GARAGE_ROOT:-/workspace/carla_garage}"
+        LEADERBOARD_ROOT: "${CARLA_GARAGE_ROOT:-/workspace/carla_garage}/leaderboard"
+        TEAM_CODE_ROOT: "${CARLA_GARAGE_ROOT:-/workspace/carla_garage}/team_code"
+        # Match host UID/GID to avoid permission issues on bind mounts
+        USERNAME: "${USERNAME:-developer}"
+        UID: "${HOST_UID:-1000}"
+        GID: "${HOST_GID:-1000}"
+
+        # Proxy settings (if needed)
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        http_proxy: "${HTTP_PROXY:-}"
+
+    # Container name (--name option)
+    container_name: carlagarage_b2dzoo
+    # Set resource sharing to host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host  # --ipc
+    network_mode: host  # Use host network to connect to CARLA on host
+    shm_size: "${SHM_SIZE:-16g}"  # --shm-size
+    # Stable operation for development
+    init: true  # --init option
+    stdin_open: true  # -i option
+    tty: true  # -t option
+    # Set startup directory
+    working_dir: /workspace
+
+    # Environment variables (-e option)
+    environment:
+      # Base path for project data inside the container
+      PROJECT_DATA_ROOT: ${PROJECT_DATA_ROOT:-/workspace/data}
+      # CARLA path inside the container
+      CARLA_ROOT: "${CARLA_CONTAINER_ROOT:-/workspace/carla}"
+      # GPU list and port settings for multi-GPU evaluation
+      # (shared with carla/launch_carla_servers_host.sh)
+      EVAL_GPUS: "${EVAL_GPUS:-0}"
+      CARLA_BASE_PORT: "${CARLA_BASE_PORT:-30000}"
+      CARLA_BASE_TM_PORT: "${CARLA_BASE_TM_PORT:-50000}"
+      CARLA_PORT_STEP: "${CARLA_PORT_STEP:-150}"
+    
+    # Volume mounts
+    volumes:
+      # CARLA PythonAPI on host
+      - "${CARLA_HOST_PATH:-./carla}:${CARLA_CONTAINER_ROOT:-/workspace/carla}"
+      # Carla Garage codes
+      - ./carla_garage:${CARLA_GARAGE_ROOT:-/workspace/carla_garage}
+      # Custom nuScenes-layout data agent (kept outside the upstream clone)
+      - ./team_code/data_agents:${CARLA_GARAGE_ROOT:-/workspace/carla_garage}/team_code/data_agents
+      # Tools
+      - ./tools:/workspace/tools
+      # Project data (datasets, logs, etc.)
+      - ./data:${PROJECT_DATA_ROOT:-/workspace/data}
+      # Mount Bench2DriveZoo folder
+      - ./Bench2DriveZoo:/workspace/Bench2DriveZoo
+      - b2d_mmcv:/workspace/Bench2DriveZoo/mmcv  # Overlay mmcv/ with a named volume to keep the in-place build artifacts
+
+# Named volume holding the built mmcv (with compiled CUDA extensions)
+volumes:
+  b2d_mmcv:

@@ -69,6 +69,9 @@ RUN curl -fsSL -o /tmp/Miniforge3.sh \
 ENV PATH "/opt/conda/envs/garage_2/bin":"/opt/conda/envs/bin":$PATH
 
 # Install PyTorch and torchvision again to ensure CUDA compatibility
+# (requirements.txt installs the default PyPI build, e.g. cu124; pin the
+#  +${TORCH_CUDA} local version so pip actually replaces it instead of
+#  treating "torch==2.5.0" as already satisfied)
 RUN /opt/conda/bin/conda run -n garage_2 \
     pip install \
         torch==2.5.0+${TORCH_CUDA} \
@@ -93,10 +96,60 @@ ENV PYTHONPATH "${CARLA_ROOT}/PythonAPI/carla":"${SCENARIO_RUNNER_ROOT}":"${LEAD
 ############################################################################################
 ####                     BEGINNING OF AGENT SPECIFIC COMMANDS                           ####
 ############################################################################################
+# Bench2DriveZoo installation
 
-# ENV TEAM_AGENT ${TEAM_CODE_ROOT}/sensor_agent.py
-# ENV TEAM_CONFIG ${TEAM_CODE_ROOT}/YOUR_CONFIG_FILE
-# ENV CHALLENGE_TRACK_CODENAME SENSORS
+# Set environment variables for GCC installation
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+# Install GCC9.4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc-9 g++-9 \
+    wget \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# GPU architecture for mmcv build
+ARG TORCH_CUDA_ARCH_LIST=8.9
+# Set environment variables for mmcv build
+ENV CC=/usr/bin/gcc-9 \
+    CXX=/usr/bin/g++-9 \
+    CUDA_HOME=/usr/local/cuda \
+    CPATH=/usr/local/cuda/include \
+    PATH=/usr/local/cuda/bin:${PATH} \
+    LD_LIBRARY_PATH=/opt/conda/envs/garage_2/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH} \
+    TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST} \
+    FORCE_CUDA=1 \
+    MMCV_WITH_OPS=1
+# Install build tools (ninja is already installed by apt)
+# (setuptools>=64 is required for editable installs without build isolation;
+#  <81 keeps pkg_resources, which old torchmetrics still imports)
+RUN /opt/conda/bin/conda run -n garage_2 \
+    pip install ninja packaging wheel "setuptools>=64,<81"
+# Install Bench2DriveZoo runtime dependencies with Python 3.10 compatible
+# versions (Bench2DriveZoo/requirements.txt pins py3.8-era versions such as
+# numpy==1.20.0 / numba==0.48.0 that cannot be installed on Python 3.10,
+# so the editable install below uses --no-deps instead).
+# numpy is pinned to keep the version required by carla_garage.
+# Pillow is pinned to the version used by the Bench2Drive-side image.
+RUN /opt/conda/bin/conda run -n garage_2 \
+    pip install \
+        addict "yapf==0.40.1" terminaltables prettytable pycocotools \
+        nuscenes-devkit lyft_dataset_sdk motmetrics numba \
+        trimesh similaritymeasures casadi open3d imagecorruptions \
+        seaborn ipython pandas \
+        "numpy==1.26.4" Pillow
+# Install Bench2DriveZoo repo
+# (--no-build-isolation: setup.py imports torch, which is unavailable
+#  in pip's isolated build environment)
+WORKDIR /workspace/Bench2DriveZoo
+COPY Bench2DriveZoo /workspace/Bench2DriveZoo/
+RUN /opt/conda/bin/conda run -n garage_2 \
+    pip install -v -e . --no-build-isolation --no-deps
+
+# Add symbolic links for Bench2DriveZoo
+# RUN ln -s /workspace/Bench2DriveZoo ${CARLA_GARAGE_ROOT}/Bench2Drive/
 
 ############################################################################################
 ####                        END OF AGENT SPECIFIC COMMANDS                              ####
