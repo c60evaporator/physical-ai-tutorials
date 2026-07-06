@@ -24,7 +24,7 @@ export PYTHONPATH=${CARLA_ROOT:-/workspace/carla}/PythonAPI/carla:${LEADERBOARD_
 mkdir -p "$(dirname "$TEAM_CONFIG")"  # Ensure the directory exists
 export REPETITIONS=${REPETITIONS:-1} # multiple evaluation runs (1 means no repetition, 2 means each route is run twice, etc.)
 
-export DEBUG_CHALLENGE=0
+export DEBUG_CHALLENGE=${DEBUG_CHALLENGE:-0}  # If set to 1, run in debug mode (save trajectory image in tfpp); if set to 0, run in normal mode
 # Use a script-local override variable to avoid inheriting container default CHALLENGE_TRACK_CODENAME=SENSORS.
 export EVALUATION_TIMEOUT=${EVALUATION_TIMEOUT:-600} # seconds
 

@@ -22,6 +22,9 @@ from __future__ import print_function
 from pdm_lite_patches import apply_pdm_lite_patches
 
 import argparse
+import functools
+import inspect
+import os
 import sys
 import time
 from argparse import RawTextHelpFormatter
@@ -40,6 +43,44 @@ from leaderboard.autoagents import agent_wrapper
 agent_wrapper.MAX_ALLOWED_RADIUS_SENSOR = 100.0
 
 
+def _install_route_index_setup_patch(module_agent):
+    """Feed the per-route ``save_name`` into the agent's ``setup(route_index=...)``.
+
+    The upstream ``LeaderboardEvaluator`` appends ``'+' + save_name`` to
+    ``args.agent_config`` and then calls ``agent.setup(agent_config)`` with a
+    single positional argument, so ``route_index`` always defaults to ``None``.
+
+    CARLA-garage's ``sensor_agent`` (tfpp) gates *all* of its ``SAVE_PATH``
+    output (metric_info.json, target_speeds.json.gz, tp_attention.json.gz and
+    the DEBUG_CHALLENGE visualizations) on ``route_index is not None``, so with
+    the upstream call it silently writes nothing. We wrap ``setup`` to recover
+    ``save_name`` from the ``'+'`` suffix and pass it through as ``route_index``.
+
+    Scope of the patch is kept minimal:
+      * only agents whose ``setup`` actually accepts ``route_index`` are touched
+        (uniad reads ``SAVE_PATH`` directly and has no such parameter);
+      * it is a no-op unless ``SAVE_PATH`` is set, i.e. normal evaluation runs
+        are completely unaffected.
+    """
+    agent_class_name = getattr(module_agent, 'get_entry_point')()
+    agent_class = getattr(module_agent, agent_class_name)
+    orig_setup = agent_class.setup
+
+    if 'route_index' not in inspect.signature(orig_setup).parameters:
+        return  # e.g. uniad: no route_index, saving works via SAVE_PATH already
+    if getattr(orig_setup, '_route_index_patched', False):
+        return
+
+    @functools.wraps(orig_setup)
+    def setup_with_route_index(self, path_to_conf_file, route_index=None, *args, **kwargs):
+        if route_index is None and os.environ.get('SAVE_PATH') and '+' in path_to_conf_file:
+            route_index = path_to_conf_file.split('+')[-1]
+        return orig_setup(self, path_to_conf_file, route_index, *args, **kwargs)
+
+    setup_with_route_index._route_index_patched = True
+    agent_class.setup = setup_with_route_index
+
+
 class ExternalCarlaLeaderboardEvaluator(LeaderboardEvaluator):
     """``LeaderboardEvaluator`` variant that connects to an external CARLA server."""
 
@@ -53,6 +94,9 @@ class ExternalCarlaLeaderboardEvaluator(LeaderboardEvaluator):
         """
         super().__init__(args, statistics_manager)
         apply_pdm_lite_patches()
+        # super().__init__ has imported the agent module; patch its setup so the
+        # per-route save_name reaches route_index (see helper docstring).
+        _install_route_index_setup_patch(self.module_agent)
 
     def _setup_simulation(self, args):
         """Connect to an already-running CARLA server instead of launching one.

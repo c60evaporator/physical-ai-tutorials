@@ -30,8 +30,8 @@ ROUTES_FILE="${1:?Please specify the routes file (.xml). Usage: $0 <routes_file>
 EVAL_ROUTES="$(basename "$ROUTES_FILE" .xml)"  # Use file name of ROUTES_FILE as eval_route name
 AGENT_NAME=$2
 
-SAVE_SENSOR_DATA=${SAVE_SENSOR_DATA:-0}  # If set to 1, save sensor data during evaluation; if set to 0, do not save sensor data
-DEBUG_CHALLENGE=${DEBUG_CHALLENGE:-0}  # If set to 1, run in debug mode (prints additional debug information); if set to 0, run in normal mode
+SAVE_AGENT_DATA=${SAVE_AGENT_DATA:-0}  # If set to 1, save agent data (metric_info.json, etc.) during evaluation; if set to 0, do not save agent data
+DEBUG_CHALLENGE=${DEBUG_CHALLENGE:-0}  # If set to 1, run in debug mode (prints agent debug information); if set to 0, run in normal mode
 
 PRIVILEGED_MODE=${PRIVILEGED_MODE:-0}  # If set to 1, run in privileged mode (using autopilot agent); if set to 0, run in non-privileged mode (using PDM-Lite agent)
 
@@ -45,10 +45,19 @@ elif [ "$AGENT_NAME" = "tfpp" ]; then
     TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/team_code/sensor_agent.py}  # Sensor-based agent for evaluation
     TEAM_CONFIG=${TEAM_CONFIG:-${CARLA_GARAGE_ROOT}/team_code/model_ckpt/tfpp/all_towns}  # Pretrained weight folder that include `config.json` and `model_0030_*.pth` for ensemble inference
     PLANNER_TYPE=traj
-elif [ "$AGENT_NAME" = "uniad" ]; then
+elif [ "$AGENT_NAME" = "uniad-base" ]; then
     PRIVILEGED_MODE=0
     TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/../Bench2DriveZoo/team_code/uniad_b2d_agent.py}  # Sensor-based agent for evaluation
     TEAM_CONFIG=${TEAM_CONFIG:-${CARLA_GARAGE_ROOT}/../Bench2DriveZoo/adzoo/uniad/configs/stage2_e2e/base_e2e_b2d.py+${CARLA_GARAGE_ROOT}/../Bench2DriveZoo/ckpts/uniad_base_b2d.pth}
+    PLANNER_TYPE=traj
+    # Bench2DriveZoo agents import "from Bench2DriveZoo.team_code... import ..."
+    # (needs the parent dir of Bench2DriveZoo) and "import adzoo..." (needs
+    # Bench2DriveZoo itself). Appended to PYTHONPATH after the reset below.
+    EXTRA_PYTHONPATH=${CARLA_GARAGE_ROOT}/..:${CARLA_GARAGE_ROOT}/../Bench2DriveZoo
+elif [ "$AGENT_NAME" = "uniad-tiny" ]; then
+    PRIVILEGED_MODE=0
+    TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/../Bench2DriveZoo/team_code/uniad_b2d_agent.py}  # Sensor-based agent for evaluation
+    TEAM_CONFIG=${TEAM_CONFIG:-${CARLA_GARAGE_ROOT}/../Bench2DriveZoo/adzoo/uniad/configs/stage2_e2e/tiny_e2e_b2d.py+${CARLA_GARAGE_ROOT}/../Bench2DriveZoo/ckpts/uniad_tiny_b2d.pth}
     PLANNER_TYPE=traj
     # Bench2DriveZoo agents import "from Bench2DriveZoo.team_code... import ..."
     # (needs the parent dir of Bench2DriveZoo) and "import adzoo..." (needs
@@ -92,8 +101,8 @@ mkdir -p \
     "${DATA_SAVE_DIR}/logs" \
     "${DATA_SAVE_DIR}/results"
 
-# Enable saving sensor data if SAVE_SENSOR_DATA is set to 1
-if [ "${SAVE_SENSOR_DATA}" -eq 1 ]; then
+# Enable saving agent data if SAVE_AGENT_DATA is set to 1
+if [ "${SAVE_AGENT_DATA}" -eq 1 ]; then
     mkdir -p "${DATA_SAVE_DIR}/data"
     export SAVE_PATH="${DATA_SAVE_DIR}/data"
 fi    
@@ -196,7 +205,8 @@ run_gpu() {
         # - WORK_DIR: required by get_weather_id() to locate leaderboard/data/weather.xml
         # - IS_BENCH2DRIVE: autopilot.py uses path_to_conf_file for save_name
         # - ROUTES env var: read by autopilot.py for the save path stem
-        # - SAVE_PATH intentionally NOT set (evaluation mode, no sensor data writing)
+        # - SAVE_PATH: not listed here; when SAVE_AGENT_DATA=1 it is exported above
+        #   (data dir) and inherited by this python call, otherwise it stays unset
         WORK_DIR=${CARLA_GARAGE_ROOT}/Bench2Drive \
         IS_BENCH2DRIVE=True \
         ROUTES="${ROUTES}" \
