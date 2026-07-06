@@ -131,15 +131,23 @@ RUN /opt/conda/bin/conda run -n garage_2 \
 # versions (Bench2DriveZoo/requirements.txt pins py3.8-era versions such as
 # numpy==1.20.0 / numba==0.48.0 that cannot be installed on Python 3.10,
 # so the editable install below uses --no-deps instead).
-# numpy is pinned to keep the version required by carla_garage.
-# Pillow is pinned to the version used by the Bench2Drive-side image.
+# numpy and matplotlib are pinned to keep the versions required by
+# carla_garage (unpinned, the resolver upgrades matplotlib, whose newer
+# versions drop the 'seaborn-whitegrid' style used by Bench2DriveZoo /
+# nuscenes-devkit 1.1.x).
 RUN /opt/conda/bin/conda run -n garage_2 \
     pip install \
         addict "yapf==0.40.1" terminaltables prettytable pycocotools \
-        nuscenes-devkit lyft_dataset_sdk motmetrics numba \
+        lyft_dataset_sdk motmetrics numba \
         trimesh similaritymeasures casadi open3d imagecorruptions \
-        seaborn ipython pandas \
-        "numpy==1.26.4" Pillow
+        seaborn ipython pandas descartes \
+        "numpy==1.26.4" "matplotlib==3.5.3" Pillow
+# nuscenes-devkit 1.1.11 (the version matching Bench2DriveZoo's code; 1.2.x
+# needs matplotlib>=3.6) is installed with --no-deps because it pins
+# Shapely<2.0, which would downgrade the shapely==2.0.4 that carla_garage
+# requires. Its actual runtime deps are already installed above.
+RUN /opt/conda/bin/conda run -n garage_2 \
+    pip install --no-deps "nuscenes-devkit==1.1.11"
 # Install Bench2DriveZoo repo
 # (--no-build-isolation: setup.py imports torch, which is unavailable
 #  in pip's isolated build environment)

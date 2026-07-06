@@ -30,6 +30,14 @@ import carla
 
 from leaderboard.leaderboard_evaluator import LeaderboardEvaluator
 from leaderboard.utils.statistics_manager import StatisticsManager
+from leaderboard.autoagents import agent_wrapper
+
+# Bench2DriveZoo agents (uniad, vad, ...) attach a top-down 'bev' camera at
+# z=50m whenever IS_BENCH2DRIVE is set, and their tick() requires it. Upstream
+# relaxes the 3m sensor-placement limit only when SAVE_PATH is set
+# (visualization mode with per-frame image dumps, which we deliberately keep
+# off during evaluation), so relax the limit here instead.
+agent_wrapper.MAX_ALLOWED_RADIUS_SENSOR = 100.0
 
 
 class ExternalCarlaLeaderboardEvaluator(LeaderboardEvaluator):

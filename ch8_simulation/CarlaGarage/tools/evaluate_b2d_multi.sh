@@ -30,6 +30,9 @@ ROUTES_FILE="${1:?Please specify the routes file (.xml). Usage: $0 <routes_file>
 EVAL_ROUTES="$(basename "$ROUTES_FILE" .xml)"  # Use file name of ROUTES_FILE as eval_route name
 AGENT_NAME=$2
 
+SAVE_SENSOR_DATA=${SAVE_SENSOR_DATA:-0}  # If set to 1, save sensor data during evaluation; if set to 0, do not save sensor data
+DEBUG_CHALLENGE=${DEBUG_CHALLENGE:-0}  # If set to 1, run in debug mode (prints additional debug information); if set to 0, run in normal mode
+
 PRIVILEGED_MODE=${PRIVILEGED_MODE:-0}  # If set to 1, run in privileged mode (using autopilot agent); if set to 0, run in non-privileged mode (using PDM-Lite agent)
 
 if [ "$AGENT_NAME" = "pdmlite" ]; then
@@ -47,6 +50,10 @@ elif [ "$AGENT_NAME" = "uniad" ]; then
     TEAM_AGENT=${TEAM_AGENT:-${CARLA_GARAGE_ROOT}/../Bench2DriveZoo/team_code/uniad_b2d_agent.py}  # Sensor-based agent for evaluation
     TEAM_CONFIG=${TEAM_CONFIG:-${CARLA_GARAGE_ROOT}/../Bench2DriveZoo/adzoo/uniad/configs/stage2_e2e/base_e2e_b2d.py+${CARLA_GARAGE_ROOT}/../Bench2DriveZoo/ckpts/uniad_base_b2d.pth}
     PLANNER_TYPE=traj
+    # Bench2DriveZoo agents import "from Bench2DriveZoo.team_code... import ..."
+    # (needs the parent dir of Bench2DriveZoo) and "import adzoo..." (needs
+    # Bench2DriveZoo itself). Appended to PYTHONPATH after the reset below.
+    EXTRA_PYTHONPATH=${CARLA_GARAGE_ROOT}/..:${CARLA_GARAGE_ROOT}/../Bench2DriveZoo
 else
     TEAM_AGENT=${TEAM_AGENT:?Please set TEAM_AGENT environment variable for agent '${AGENT_NAME}'.}
     TEAM_CONFIG=${TEAM_CONFIG:?Please set TEAM_CONFIG environment variable for agent '${AGENT_NAME}'.}
@@ -85,6 +92,12 @@ mkdir -p \
     "${DATA_SAVE_DIR}/logs" \
     "${DATA_SAVE_DIR}/results"
 
+# Enable saving sensor data if SAVE_SENSOR_DATA is set to 1
+if [ "${SAVE_SENSOR_DATA}" -eq 1 ]; then
+    mkdir -p "${DATA_SAVE_DIR}/data"
+    export SAVE_PATH="${DATA_SAVE_DIR}/data"
+fi    
+
 # ── CARLA Port settings (match launch_carla_servers.sh) ──
 CARLA_HOST=${CARLA_HOST:-localhost}
 BASE_PORT=${CARLA_BASE_PORT:-30000}
@@ -99,8 +112,9 @@ NUM_GPUS=${#GPU_ARRAY[@]}
 # ── Fixed parameters ──
 RECORD_PATH=${RECORD_PATH:-}  # Optional: path prefix for CARLA recording files; empty disables recording
 export RECORD_PATH
-# Reset PYTHONPATH to Bench2Drive paths only, to prevent CarlaGarage leaderboard from shadowing Bench2Drive's leaderboard
-export PYTHONPATH=${CARLA_ROOT:-/workspace/carla}/PythonAPI/carla:${CARLA_GARAGE_ROOT}/Bench2Drive/leaderboard:${CARLA_GARAGE_ROOT}/Bench2Drive/scenario_runner
+# Reset PYTHONPATH to Bench2Drive paths only, to prevent CarlaGarage leaderboard from shadowing Bench2Drive's leaderboard.
+# EXTRA_PYTHONPATH (agent-specific additions, e.g. for uniad) is appended if set.
+export PYTHONPATH=${CARLA_ROOT:-/workspace/carla}/PythonAPI/carla:${CARLA_GARAGE_ROOT}/Bench2Drive/leaderboard:${CARLA_GARAGE_ROOT}/Bench2Drive/scenario_runner${EXTRA_PYTHONPATH:+:${EXTRA_PYTHONPATH}}
 
 
 # Split the route XML file for multi-GPU (split equally into NUM_GPUS parts)
@@ -197,7 +211,7 @@ run_gpu() {
             --checkpoint="${CHECKPOINT_ENDPOINT}" \
             --agent="${TEAM_AGENT}" \
             --agent-config="${TEAM_CONFIG}" \
-            --debug=0 \
+            --debug="${DEBUG_CHALLENGE}" \
             --record="${RECORD_PATH}" \
             --gpu-rank="${GPU_RANK}" \
             ${actual_resume_arg} \
