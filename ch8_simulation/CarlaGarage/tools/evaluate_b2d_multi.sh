@@ -130,7 +130,7 @@ export PYTHONPATH=${CARLA_ROOT:-/workspace/carla}/PythonAPI/carla:${CARLA_GARAGE
 SPLIT_BASE="${DATA_SAVE_DIR}/split_routes/${EVAL_ROUTES}"
 mkdir -p "${DATA_SAVE_DIR}/split_routes"
 cp "${ROUTES_FILE}" "${SPLIT_BASE}.xml"
-python3 "${CARLA_GARAGE_ROOT}/../tools/common/split_route_xml.py" "${SPLIT_BASE}" "${NUM_GPUS}"
+python3 "${CARLA_GARAGE_ROOT}/../tools/b2d_leaderboard_common/split_route_xml.py" "${SPLIT_BASE}" "${NUM_GPUS}"
 
 # ── Retry / stuck-route parameters ───────────────────────────────────────────
 MAX_RETRIES=${MAX_RETRIES:-10}  # max evaluator restart attempts per GPU before giving up
@@ -140,7 +140,7 @@ MAX_STUCK=${MAX_STUCK:-3}  # consecutive same-progress failures before force-ski
 MAX_TOTAL_SKIPS=${MAX_TOTAL_SKIPS:-10}  # per-GPU cap on total force-skips (prevents infinite loops)
 
 # skip_route.py: force-inserts a "Failed - Simulation crashed" record for the stuck route and advances progress[0] so evaluation can resume.
-SKIP_ROUTE_PY="${CARLA_GARAGE_ROOT}/../tools/common/skip_route.py"
+SKIP_ROUTE_PY="${CARLA_GARAGE_ROOT}/../tools/b2d_leaderboard_common/skip_route.py"
 
 # request_carla_restart(): asks the host-side watchdog for a fresh CARLA
 # instance via a sentinel file in tools/carla_launch/ (shared ./tools mount).

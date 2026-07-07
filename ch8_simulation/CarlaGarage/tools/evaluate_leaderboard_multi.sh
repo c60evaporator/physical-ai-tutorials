@@ -105,7 +105,7 @@ NUM_GPUS=${#GPU_ARRAY[@]}
 SPLIT_BASE="${DATA_SAVE_DIR}/split_routes/${EVAL_ROUTES}"
 mkdir -p "${DATA_SAVE_DIR}/split_routes"
 cp "${ROUTES_FILE}" "${SPLIT_BASE}.xml"
-python3 "${CARLA_GARAGE_ROOT}/../tools/common/split_route_xml.py" "${SPLIT_BASE}" "${NUM_GPUS}"
+python3 "${CARLA_GARAGE_ROOT}/../tools/b2d_leaderboard_common/split_route_xml.py" "${SPLIT_BASE}" "${NUM_GPUS}"
 
 # ── Retry / watchdog parameters ─────────────────────────────────────────────
 MAX_RETRIES=${MAX_RETRIES:-10}  # max evaluator restart attempts per GPU before giving up
