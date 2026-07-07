@@ -131,17 +131,24 @@ RUN /opt/conda/bin/conda run -n garage_2 \
 # versions (Bench2DriveZoo/requirements.txt pins py3.8-era versions such as
 # numpy==1.20.0 / numba==0.48.0 that cannot be installed on Python 3.10,
 # so the editable install below uses --no-deps instead).
-# numpy and matplotlib are pinned to keep the versions required by
-# carla_garage (unpinned, the resolver upgrades matplotlib, whose newer
-# versions drop the 'seaborn-whitegrid' style used by Bench2DriveZoo /
-# nuscenes-devkit 1.1.x).
+# matplotlib is pinned to 3.5.3 because newer releases drop the
+# 'seaborn-whitegrid' style used by Bench2DriveZoo / nuscenes-devkit 1.1.x.
 RUN /opt/conda/bin/conda run -n garage_2 \
     pip install \
         addict "yapf==0.40.1" terminaltables prettytable pycocotools \
-        lyft_dataset_sdk motmetrics numba \
+        lyft_dataset_sdk motmetrics "numba==0.56.4" \
         trimesh similaritymeasures casadi open3d imagecorruptions \
         seaborn ipython pandas descartes \
-        "numpy==1.26.4" "matplotlib==3.5.3" Pillow
+        "numpy==1.23.5" "matplotlib==3.5.3" Pillow
+# numba.errors compatibility shim.
+# numba.errors was removed in numba 0.56.0 (moved to numba.core.errors), but
+# Bench2DriveZoo/mmcv still imports from the old path.  Instead of modifying
+# mmcv source files, inject a thin re-export shim into the installed numba
+# package so the import resolves without any change to mmcv code.
+RUN /opt/conda/bin/conda run -n garage_2 python -c \
+    "import os, numba; \
+     p = os.path.join(os.path.dirname(numba.__file__), 'errors.py'); \
+     open(p, 'w').write('# compat shim: numba.errors removed in numba 0.56.0\nfrom numba.core.errors import *\n')"
 # nuscenes-devkit 1.1.11 (the version matching Bench2DriveZoo's code; 1.2.x
 # needs matplotlib>=3.6) is installed with --no-deps because it pins
 # Shapely<2.0, which would downgrade the shapely==2.0.4 that carla_garage
@@ -153,6 +160,10 @@ RUN /opt/conda/bin/conda run -n garage_2 \
 #  in pip's isolated build environment)
 WORKDIR /workspace/Bench2DriveZoo
 COPY Bench2DriveZoo /workspace/Bench2DriveZoo/
+# Delete any pre-compiled .so files that may have been copied from the host.
+# Without this, pip install -e . may skip recompilation (treating existing
+# binaries as up-to-date) and the container would end up with CPU-only ops.
+RUN find /workspace/Bench2DriveZoo -name "*.so" -delete
 RUN /opt/conda/bin/conda run -n garage_2 \
     pip install -v -e . --no-build-isolation --no-deps
 
